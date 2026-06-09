@@ -9,10 +9,11 @@ Personal homelab configuration, setup scripts, and Docker compose files for Ubun
 ```
 homelab/
 ├── setup/
-│   └── server-setup.sh     # Post-install setup script for Ubuntu Server 24.04
-├── autoinstall/            # Autoinstall USB files (personal copies kept off repo)
-│   └── README.md
-└── docker/                 # Docker compose files (added as stacks are built out)
+│   └── server-setup.sh         # Post-install setup script for Ubuntu Server 24.04
+├── experimental/
+│   └── autoinstall/            # Unattended Ubuntu install — work in progress
+│       └── README.md
+└── docker/                     # Docker compose files (added as stacks are built out)
 ```
 
 ---
@@ -95,7 +96,7 @@ The script walks through a series of questions before making any changes. Press 
 | Server LAN IP | Auto-detected from network interface. Confirm or change |
 | Router IP | Auto-derived from server LAN IP (replaces last octet with .1). Confirm or change |
 | Docker connection name | Label used in Homepage to identify this Docker host. Default: `server-docker` |
-| Timezone | Detected from system. UTC shown on fresh installs — enter your timezone if needed |
+| Timezone | Detected from system. Link provided to look up valid timezone identifiers |
 | Docker base directory | Default: `/opt/docker` |
 | Appdata subdirectory | Default: `/opt/docker/appdata` |
 | Volumes subdirectory | Default: `/opt/docker/volumes` |
@@ -186,7 +187,6 @@ DOCKER_CONNECTION_NAME=server-docker
 DOCKERDIR=/opt/docker
 APPDATA=/opt/docker/appdata
 VOLUMES=/opt/docker/volumes
-...
 ```
 
 Reference these variables in any compose file:
@@ -234,12 +234,9 @@ After the script completes, NPM needs to be configured before use:
 
 ---
 
-## Autoinstall (Unattended Ubuntu Install via USB)
+## Experimental
 
-The `autoinstall/` folder contains reference information for setting up an unattended Ubuntu Server install via a CIDATA USB stick.
-
-> Personal `user-data` and `meta-data` files are intentionally kept off this repo as they contain hostname, username, and password hash. They live on the CIDATA USB and NAS backup only.
-> See `autoinstall/README.md` for full instructions.
+The `experimental/` folder contains work-in-progress features that are not part of the current build. See individual README files within for details and contribution notes.
 
 ---
 
