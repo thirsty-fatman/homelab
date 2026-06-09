@@ -35,7 +35,7 @@
 #   sudo ./server-setup.sh
 #
 # Or directly from GitHub:
-#   curl -fsSL https://raw.githubusercontent.com/yourusername/homelab/main/setup/server-setup.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/server-setup.sh | sudo bash
 # =============================================================================
 
 set -euo pipefail  # Exit on error, undefined variables, and pipe failures
