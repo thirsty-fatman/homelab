@@ -2,11 +2,14 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.6.0
+# Version  : 1.7.0
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.7.0 - 2026-06-10 - Fixed compose volume paths to use \${APPDATA} variable.
+#                         Added GitHub username prompt — removes thirsty-fatman
+#                         from script body. Used in bookmarks and clone URL.
 #   1.6.0 - 2026-06-10 - Router IP auto-derived from server LAN IP as default (.1).
 #                         Added Docker connection name prompt (after Server LAN IP),
 #                         validated to lowercase letters, numbers, hyphens only.
@@ -266,6 +269,11 @@ echo -e "${BOLD}Email address for GitHub SSH key label${RESET}"
 read -rp "  Email: " GITHUB_EMAIL < /dev/tty
 echo
 
+echo -e "${BOLD}GitHub username${RESET}"
+echo -e "  Used in bookmarks and git clone URL."
+read -rp "  GitHub username: " GITHUB_USERNAME < /dev/tty
+echo
+
 # --- Network -----------------------------------------------------------------
 header "Network"
 DETECTED_IP=$(hostname -I | awk '{print $1}')
@@ -298,11 +306,33 @@ done
 
 # --- Timezone ----------------------------------------------------------------
 header "Timezone"
-DETECTED_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "Australia/Brisbane")
+DETECTED_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
+
+echo -e "${BOLD}Timezone${RESET}"
+echo -e "  Current/default: ${YELLOW}${DETECTED_TZ}${RESET}"
 if [[ "$DETECTED_TZ" == "UTC" ]]; then
-  DETECTED_TZ="Australia/Brisbane"
+  echo -e "  ${YELLOW}Note:${RESET} UTC is the fresh install default — you may want to change this."
 fi
-prompt_default TIMEZONE "Timezone" "$DETECTED_TZ"
+echo -e "  Valid timezone names: ${CYAN}https://en.wikipedia.org/wiki/List_of_tz_database_time_zones${RESET}"
+echo -e "  (see the TZ Identifier column)"
+
+while true; do
+  read -rp "  New value (Enter to keep): " TZ_INPUT < /dev/tty
+  echo
+
+  if [[ -z "$TZ_INPUT" ]]; then
+    TIMEZONE="$DETECTED_TZ"
+    break
+  fi
+
+  # Validate against system timezone list
+  if timedatectl list-timezones | grep -qx "$TZ_INPUT"; then
+    TIMEZONE="$TZ_INPUT"
+    break
+  else
+    warn "'${TZ_INPUT}' is not a valid timezone identifier. Please check the link above and try again."
+  fi
+done
 
 # --- Docker directories ------------------------------------------------------
 header "Docker Directory Structure"
@@ -338,6 +368,7 @@ else
 fi
 
 echo -e "  GitHub SSH key    : ${YELLOW}Will be generated (${GITHUB_EMAIL})${RESET}"
+echo -e "  GitHub username   : ${YELLOW}${GITHUB_USERNAME}${RESET}"
 echo -e "  Server LAN IP     : ${YELLOW}${SERVER_LAN_IP}${RESET}"
 echo -e "  Router IP         : ${YELLOW}${ROUTER_IP}${RESET}"
 echo -e "  Docker conn. name : ${YELLOW}${DOCKER_CONNECTION_NAME}${RESET}"
@@ -624,6 +655,11 @@ DOCKER_HOST=tcp://socket-proxy:2375
 DOCKER_CONNECTION_NAME=${DOCKER_CONNECTION_NAME}
 
 # -----------------------------------------------------------------------------
+# GitHub
+# -----------------------------------------------------------------------------
+GITHUB_USERNAME=${GITHUB_USERNAME}
+
+# -----------------------------------------------------------------------------
 # Container ports
 # -----------------------------------------------------------------------------
 DOCKGE_PORT=5001
@@ -666,7 +702,10 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 192.168.91.0/24
+        - subnet: 192.168.91.0/24  # Internal Docker-only subnet for container-to-container
+                                       # communication. Not visible on your LAN.
+                                       # This IP range is not assigned by the author —
+                                       # it is a private range chosen to avoid conflicts.
 
 services:
   socket-proxy:
@@ -724,8 +763,8 @@ services:
       - "\${DOCKGE_PORT:-5001}:5001"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${DOCKER_APPDATA}/dockge:/app/data
-      - ${DOCKER_APPDATA}/dockge/stacks:/opt/stacks
+      - \${APPDATA}/dockge:/app/data
+      - \${APPDATA}/dockge/stacks:/opt/stacks
     environment:
       - DOCKGE_STACKS_DIR=/opt/stacks
 EOF
@@ -769,7 +808,7 @@ services:
     ports:
       - "\${HOMEPAGE_PORT:-3000}:3000"
     volumes:
-      - ${DOCKER_APPDATA}/homepage/config:/app/config
+      - \${APPDATA}/homepage/config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - PUID=\${PUID}
@@ -836,7 +875,7 @@ cat > "${DOCKER_APPDATA}/homepage/config/bookmarks.yaml" << EOF
 - Homelab:
   - GitHub Homelab Repo:
     - abbr: GH
-      href: https://github.com/thirsty-fatman/homelab
+      href: https://github.com/${GITHUB_USERNAME}/homelab
   - Router:
     - abbr: RT
       href: http://${ROUTER_IP}
@@ -1023,7 +1062,7 @@ services:
     ports:
       - "\${PORTAINER_PORT:-9443}:9443"
     volumes:
-      - ${DOCKER_APPDATA}/portainer:/data
+      - \${APPDATA}/portainer:/data
     environment:
       - DOCKER_HOST=tcp://socket-proxy:2375
     command: --http-disabled
@@ -1090,7 +1129,7 @@ echo
 echo -e "  ${CYAN}${GITHUB_PUBKEY}${RESET}"
 echo
 echo -e "  Once added, test with:  ${CYAN}ssh -T git@github.com${RESET}"
-echo -e "  Then clone your repo:   ${CYAN}git clone git@github.com:thirsty-fatman/homelab.git${RESET}"
+echo -e "  Then clone your repo:   ${CYAN}git clone git@github.com:${GITHUB_USERNAME}/homelab.git${RESET}"
 echo
 
 echo -e "${YELLOW}  Next steps:${RESET}"
