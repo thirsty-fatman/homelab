@@ -2,11 +2,15 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.7.0
+# Version  : 1.8.0
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.8.0 - 2026-06-10 - Added post-setup optional configuration menu.
+#                         Options to run cloudflare-setup.sh and npm-setup.sh
+#                         inline or later. NPM option validates Cloudflare
+#                         setup completed first.
 #   1.7.0 - 2026-06-10 - Fixed compose volume paths to use \${APPDATA} variable.
 #                         Added GitHub username prompt — removes thirsty-fatman
 #                         from script body. Used in bookmarks and clone URL.
@@ -1077,7 +1081,128 @@ EOF
 fi
 
 # =============================================================================
-# STEP 19 — Final summary
+# STEP 19 — Post-setup optional configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Helper: download and run a setup script inline
+# -----------------------------------------------------------------------------
+run_setup_script() {
+  local script_name="$1"
+  local script_url="https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/${script_name}"
+  local script_path="/tmp/${script_name}"
+
+  info "Downloading ${script_name}..."
+  if curl -fsSL "$script_url" -o "$script_path"; then
+    chmod +x "$script_path"
+    success "Downloaded ${script_name}."
+    echo
+    bash "$script_path"
+  else
+    error "Failed to download ${script_name} from GitHub."
+    error "Run it manually later:"
+    echo -e "  ${CYAN}curl -fsSL ${script_url} -o ${script_name}${RESET}"
+    echo -e "  ${CYAN}sudo bash ${script_name}${RESET}"
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Helper: check if Cloudflare setup has been completed
+# -----------------------------------------------------------------------------
+check_cloudflare_setup() {
+  local env_file="${DOCKER_BASE}/.env"
+  local missing=()
+
+  for var in CLOUDFLARE_TOKEN DOMAIN ZONE_ID; do
+    if ! grep -q "^${var}=" "$env_file" 2>/dev/null; then
+      missing+=("$var")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# -----------------------------------------------------------------------------
+# Post-setup menu
+# -----------------------------------------------------------------------------
+header "Optional Post-Setup Configuration"
+echo -e "  Cloudflare DNS and NPM can be configured now or later."
+echo -e "  NPM setup requires Cloudflare setup to have been completed first.
+"
+
+SKIP_SETUP=false
+
+while true; do
+  echo -e "  ${BOLD}1.${RESET} Run both Cloudflare and NPM setup"
+  echo -e "  ${BOLD}2.${RESET} Run Cloudflare setup only"
+  echo -e "  ${BOLD}3.${RESET} Run NPM setup only (requires Cloudflare setup first)"
+  echo -e "  ${BOLD}4.${RESET} Skip — I will run these later"
+  echo
+  read -rp "  Enter choice [1-4]: " POST_CHOICE < /dev/tty
+  echo
+
+  case "$POST_CHOICE" in
+    1)
+      # Run Cloudflare then NPM
+      run_setup_script "cloudflare-setup.sh"
+      echo
+      run_setup_script "npm-setup.sh"
+      break
+      ;;
+    2)
+      # Run Cloudflare only, then ask about NPM
+      run_setup_script "cloudflare-setup.sh"
+      echo
+      header "NPM Setup"
+      echo -e "  Cloudflare setup is complete."
+      read -rp "  Run NPM setup now? [y/N]: " RUN_NPM < /dev/tty
+      echo
+      if [[ "$RUN_NPM" =~ ^[Yy]$ ]]; then
+        run_setup_script "npm-setup.sh"
+      else
+        SKIP_SETUP=true
+      fi
+      break
+      ;;
+    3)
+      # NPM only — validate Cloudflare setup first
+      if check_cloudflare_setup; then
+        run_setup_script "npm-setup.sh"
+        break
+      else
+        warn "Cloudflare setup has not been completed."
+        warn "CLOUDFLARE_TOKEN, DOMAIN, or ZONE_ID not found in ${DOCKER_BASE}/.env"
+        echo
+        echo -e "  ${BOLD}1.${RESET} Run Cloudflare setup first then NPM setup"
+        echo -e "  ${BOLD}2.${RESET} Skip both — run manually later"
+        echo
+        read -rp "  Enter choice [1-2]: " CF_CHOICE < /dev/tty
+        echo
+        if [[ "$CF_CHOICE" == "1" ]]; then
+          run_setup_script "cloudflare-setup.sh"
+          echo
+          run_setup_script "npm-setup.sh"
+        else
+          SKIP_SETUP=true
+        fi
+        break
+      fi
+      ;;
+    4)
+      SKIP_SETUP=true
+      break
+      ;;
+    *)
+      warn "Invalid choice. Please enter 1, 2, 3, or 4."
+      ;;
+  esac
+done
+
+# =============================================================================
+# STEP 20 — Final summary
 # =============================================================================
 MACHINE_IP=$(hostname -I | awk '{print $1}')
 
@@ -1132,12 +1257,21 @@ echo -e "  Once added, test with:  ${CYAN}ssh -T git@github.com${RESET}"
 echo -e "  Then clone your repo:   ${CYAN}git clone git@github.com:${GITHUB_USERNAME}/homelab.git${RESET}"
 echo
 
-echo -e "${YELLOW}  Next steps:${RESET}"
+if [[ "$SKIP_SETUP" == true ]]; then
+  echo -e "${YELLOW}  Cloudflare and NPM setup — run later:${RESET}"
+  echo -e "  ${BOLD}Cloudflare DNS setup:${RESET}"
+  echo -e "    ${CYAN}curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/cloudflare-setup.sh -o cloudflare-setup.sh${RESET}"
+  echo -e "    ${CYAN}sudo bash cloudflare-setup.sh${RESET}"
+  echo
+  echo -e "  ${BOLD}NPM setup (run after Cloudflare setup):${RESET}"
+  echo -e "    ${CYAN}curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/npm-setup.sh -o npm-setup.sh${RESET}"
+  echo -e "    ${CYAN}sudo bash npm-setup.sh${RESET}"
+  echo
+fi
+
+echo -e "${YELLOW}  Other important notes:${RESET}"
 echo -e "  - Log out and back in (or reboot) for docker group membership to take effect"
-echo -e "  - NPM default login: admin@example.com / changeme — change immediately"
-echo -e "  - Set up Cloudflare DNS challenge in NPM for wildcard SSL certificate"
-echo -e "  - Add proxy hosts in NPM for each service"
-echo -e "  - Update Homepage services.yaml URLs to use your domain once NPM is configured"
+echo -e "  - NPM default login: admin@example.com / changeme — change immediately if not done"
 echo -e "  - Dockge stacks folder: ${DOCKER_APPDATA}/dockge/stacks"
 echo -e "  - Homepage config: ${DOCKER_APPDATA}/homepage/config/"
 echo -e "  - Use ${DOCKER_BASE}/.env as single source of truth for all stack variables"
