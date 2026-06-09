@@ -2,32 +2,40 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.3.0
+# Version  : 1.6.0
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.6.0 - 2026-06-10 - Router IP auto-derived from server LAN IP as default (.1).
+#                         Added Docker connection name prompt (after Server LAN IP),
+#                         validated to lowercase letters, numbers, hyphens only.
+#                         Default Docker connection name: server-docker.
+#   1.5.0 - 2026-06-10 - Added router IP prompt (no default, never hardcoded).
+#                         Added optional Portainer install (y/N prompt).
+#                         Added NPM stack deployment.
+#                         Replaced my-docker with osan-docker in Homepage config.
+#                         Fixed IP references to use SERVER_LAN_IP variable.
+#                         Router IP used in Homepage bookmarks only at runtime.
+#                         Timezone defaults to Australia/Brisbane on fresh UTC install.
+#   1.4.0 - 2026-06-09 - Removed Portainer. Added Homepage dashboard with
+#                         starter config files. Default timezone changed to
+#                         Australia/Brisbane. Fixed curl|bash stdin issue.
 #   1.3.0 - 2026-06-09 - Added .env file generation for Docker stack.
-#                         Added Socket Proxy compose stack.
-#                         Added Portainer CE and Dockge (both installed).
-#                         Added Server LAN IP detection with confirmation.
-#                         Added timezone detection with confirmation.
-#   1.2.0 - 2026-06-09 - Added SSH key authentication setup (passwordless login
-#                         from Windows). Added GitHub SSH key generation so the
-#                         server can authenticate to GitHub for git pull.
-#   1.1.0 - 2026-06-09 - Removed all hardcoded personal info. Username asked
-#                         twice to catch typos. Password only prompted when
-#                         creating a new user. Renamed to server-setup.sh.
+#                         Added Socket Proxy, Portainer CE, Dockge stacks.
+#                         Added Server LAN IP and timezone detection.
+#   1.2.0 - 2026-06-09 - Added SSH key authentication and GitHub SSH key generation.
+#   1.1.0 - 2026-06-09 - Removed all hardcoded personal info. Renamed to server-setup.sh.
 #   1.0.0 - 2026-06-09 - Initial release
 #
 # Description:
 #   Interactive post-install script for Ubuntu Server 24.04.
 #   Prompts for all settings with no hardcoded personal information.
 #   Safe to publish publicly — contains no usernames, hostnames,
-#   passwords, or identifying information.
+#   passwords, IP addresses, or identifying information.
 #
 # What this script does:
-#   1.  Sets hostname
+#   1.  Sets hostname and timezone
 #   2.  Validates or creates the primary user
 #   3.  Sets up SSH key authentication (passwordless login)
 #   4.  Generates a GitHub SSH key pair for git authentication
@@ -40,18 +48,21 @@
 #   11. Applies POSIX ACLs on Docker directories
 #   12. Configures Docker log limits
 #   13. Deploys Socket Proxy (compose stack)
-#   14. Deploys Portainer CE (compose stack)
-#   15. Deploys Dockge (compose stack)
+#   14. Deploys Dockge (compose stack)
+#   15. Deploys Homepage dashboard (compose stack + starter config)
+#   16. Deploys NGINX Proxy Manager (compose stack)
+#   17. Optionally deploys Portainer CE (compose stack)
 #
 # Usage:
-#   chmod +x server-setup.sh
-#   sudo ./server-setup.sh
+#   Download and run — do NOT pipe curl directly into bash as it breaks
+#   interactive prompts:
 #
-# Or directly from GitHub:
-#   curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/server-setup.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/server-setup.sh -o server-setup.sh
+#   chmod +x server-setup.sh
+#   sudo bash server-setup.sh
 # =============================================================================
 
-set -euo pipefail  # Exit on error, undefined variables, and pipe failures
+set -euo pipefail
 
 # -----------------------------------------------------------------------------
 # Colour helpers
@@ -73,14 +84,12 @@ header()  { echo -e "\n${BOLD}${CYAN}=== $* ===${RESET}\n"; }
 # Must be run as root
 # -----------------------------------------------------------------------------
 if [[ "$EUID" -ne 0 ]]; then
-  error "This script must be run as root. Try: sudo ./server-setup.sh"
+  error "This script must be run as root. Try: sudo bash server-setup.sh"
   exit 1
 fi
 
 # -----------------------------------------------------------------------------
 # Helper: prompt with default
-#   Shows current/default value. Enter to keep, or type a new value.
-#   Usage: prompt_default VARNAME "Question text" "default value"
 # -----------------------------------------------------------------------------
 prompt_default() {
   local varname="$1"
@@ -90,7 +99,7 @@ prompt_default() {
 
   echo -e "${BOLD}${question}${RESET}"
   echo -e "  Current/default: ${YELLOW}${default}${RESET}"
-  read -rp "  New value (Enter to keep): " input
+  read -rp "  New value (Enter to keep): " input < /dev/tty
   echo
 
   if [[ -z "$input" ]]; then
@@ -101,9 +110,7 @@ prompt_default() {
 }
 
 # -----------------------------------------------------------------------------
-# Helper: prompt required (no default, must type something)
-#   Asked twice — both entries must match to catch typos.
-#   Usage: prompt_required VARNAME "Question text"
+# Helper: prompt required (no default, asked twice to catch typos)
 # -----------------------------------------------------------------------------
 prompt_required() {
   local varname="$1"
@@ -112,7 +119,7 @@ prompt_required() {
 
   while true; do
     echo -e "${BOLD}${question}${RESET}"
-    read -rp "  Enter value: " input1
+    read -rp "  Enter value: " input1 < /dev/tty
     echo
 
     if [[ -z "$input1" ]]; then
@@ -120,7 +127,7 @@ prompt_required() {
       continue
     fi
 
-    read -rp "  Confirm value (type again): " input2
+    read -rp "  Confirm value (type again): " input2 < /dev/tty
     echo
 
     if [[ "$input1" == "$input2" ]]; then
@@ -133,8 +140,30 @@ prompt_required() {
 }
 
 # -----------------------------------------------------------------------------
-# Helper: prompt password (hidden input, confirmed, minimum 8 characters)
-#   Usage: prompt_password VARNAME "username"
+# Helper: prompt required single entry (no default, no confirmation)
+# -----------------------------------------------------------------------------
+prompt_required_single() {
+  local varname="$1"
+  local question="$2"
+  local input
+
+  while true; do
+    echo -e "${BOLD}${question}${RESET}"
+    read -rp "  Enter value: " input < /dev/tty
+    echo
+
+    if [[ -z "$input" ]]; then
+      warn "Value cannot be blank. Please try again."
+      continue
+    fi
+
+    printf -v "$varname" '%s' "$input"
+    break
+  done
+}
+
+# -----------------------------------------------------------------------------
+# Helper: prompt password (hidden, confirmed, minimum 8 characters)
 # -----------------------------------------------------------------------------
 prompt_password() {
   local varname="$1"
@@ -143,7 +172,7 @@ prompt_password() {
 
   while true; do
     echo -e "${BOLD}Password for new user '${username}'${RESET}"
-    read -rsp "  Enter password: " pass1
+    read -rsp "  Enter password: " pass1 < /dev/tty
     echo
 
     if [[ ${#pass1} -lt 8 ]]; then
@@ -151,7 +180,7 @@ prompt_password() {
       continue
     fi
 
-    read -rsp "  Confirm password: " pass2
+    read -rsp "  Confirm password: " pass2 < /dev/tty
     echo
 
     if [[ "$pass1" == "$pass2" ]]; then
@@ -166,8 +195,6 @@ prompt_password() {
 
 # -----------------------------------------------------------------------------
 # Helper: prompt for SSH public key
-#   Validates that input looks like a real public key before accepting.
-#   Usage: prompt_ssh_pubkey VARNAME
 # -----------------------------------------------------------------------------
 prompt_ssh_pubkey() {
   local varname="$1"
@@ -177,7 +204,7 @@ prompt_ssh_pubkey() {
     echo -e "${BOLD}SSH public key for passwordless login${RESET}"
     echo -e "  Paste your public key (starts with ssh-ed25519 or ssh-rsa)."
     echo -e "  Press Enter to skip if you do not have one yet."
-    read -rp "  Public key: " input
+    read -rp "  Public key: " input < /dev/tty
     echo
 
     if [[ -z "$input" ]]; then
@@ -199,7 +226,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Ubuntu Server 24.04 - Post-Install Setup"
-echo "   v1.3.0 | 2026-06-09"
+echo "   v1.5.0 | 2026-06-10"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "For each question, press ${YELLOW}Enter${RESET} to accept the default,"
@@ -214,7 +241,6 @@ prompt_default NEW_HOSTNAME "Hostname" "$CURRENT_HOSTNAME"
 header "Primary User"
 prompt_required USERNAME "Username (type carefully — asked twice to confirm)"
 
-# Check if user exists
 USER_EXISTS=false
 if id "$USERNAME" &>/dev/null; then
   USER_EXISTS=true
@@ -237,16 +263,45 @@ header "GitHub SSH Key"
 echo -e "  A new SSH key pair will be generated on this server for GitHub authentication."
 echo -e "  At the end of setup the public key will be displayed for you to add to GitHub.\n"
 echo -e "${BOLD}Email address for GitHub SSH key label${RESET}"
-read -rp "  Email: " GITHUB_EMAIL
+read -rp "  Email: " GITHUB_EMAIL < /dev/tty
 echo
 
-# --- Server LAN IP -----------------------------------------------------------
+# --- Network -----------------------------------------------------------------
 header "Network"
 DETECTED_IP=$(hostname -I | awk '{print $1}')
 prompt_default SERVER_LAN_IP "Server LAN IP address" "$DETECTED_IP"
 
+# Derive default router IP by replacing last octet with .1
+DERIVED_ROUTER_IP=$(echo "$SERVER_LAN_IP" | sed 's/\.[0-9]*$/.1/')
+prompt_default ROUTER_IP "Router/gateway IP address" "$DERIVED_ROUTER_IP"
+
+# --- Docker connection name --------------------------------------------------
+# Used as the label in Homepage docker.yaml and services.yaml server: entries.
+# Allowed characters: lowercase letters, numbers, hyphens only.
+while true; do
+  echo -e "${BOLD}Docker connection name${RESET}"
+  echo -e "  Used in Homepage to identify this Docker host."
+  echo -e "  Current/default: ${YELLOW}server-docker${RESET}"
+  echo -e "  Allowed characters: lowercase letters, numbers, hyphens (e.g. server-docker)"
+  read -rp "  New value (Enter to keep): " DOCKER_NAME_INPUT < /dev/tty
+  echo
+  if [[ -z "$DOCKER_NAME_INPUT" ]]; then
+    DOCKER_CONNECTION_NAME="server-docker"
+    break
+  elif [[ "$DOCKER_NAME_INPUT" =~ ^[a-z0-9-]+$ ]]; then
+    DOCKER_CONNECTION_NAME="$DOCKER_NAME_INPUT"
+    break
+  else
+    warn "Invalid characters. Use lowercase letters, numbers, and hyphens only."
+  fi
+done
+
 # --- Timezone ----------------------------------------------------------------
+header "Timezone"
 DETECTED_TZ=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "Australia/Brisbane")
+if [[ "$DETECTED_TZ" == "UTC" ]]; then
+  DETECTED_TZ="Australia/Brisbane"
+fi
 prompt_default TIMEZONE "Timezone" "$DETECTED_TZ"
 
 # --- Docker directories ------------------------------------------------------
@@ -254,6 +309,13 @@ header "Docker Directory Structure"
 prompt_default DOCKER_BASE    "Docker base directory"  "/opt/docker"
 prompt_default DOCKER_APPDATA "Appdata subdirectory"   "${DOCKER_BASE}/appdata"
 prompt_default DOCKER_VOLUMES "Volumes subdirectory"   "${DOCKER_BASE}/volumes"
+
+# --- Optional Portainer ------------------------------------------------------
+header "Optional Components"
+echo -e "${BOLD}Install Portainer CE? (Docker management UI, port 9443)${RESET}"
+read -rp "  Install Portainer? [y/N]: " INSTALL_PORTAINER < /dev/tty
+echo
+INSTALL_PORTAINER=${INSTALL_PORTAINER,,}  # lowercase
 
 # =============================================================================
 # STEP 2 — Confirmation summary
@@ -277,17 +339,25 @@ fi
 
 echo -e "  GitHub SSH key    : ${YELLOW}Will be generated (${GITHUB_EMAIL})${RESET}"
 echo -e "  Server LAN IP     : ${YELLOW}${SERVER_LAN_IP}${RESET}"
+echo -e "  Router IP         : ${YELLOW}${ROUTER_IP}${RESET}"
+echo -e "  Docker conn. name : ${YELLOW}${DOCKER_CONNECTION_NAME}${RESET}"
 echo -e "  Timezone          : ${YELLOW}${TIMEZONE}${RESET}"
 echo -e "  Docker base       : ${YELLOW}${DOCKER_BASE}${RESET}"
 echo -e "  Appdata directory : ${YELLOW}${DOCKER_APPDATA}${RESET}"
 echo -e "  Volumes directory : ${YELLOW}${DOCKER_VOLUMES}${RESET}"
 echo
 echo -e "  Stacks to be deployed:"
-echo -e "    - Socket Proxy  (internal only — no UI)"
-echo -e "    - Portainer CE  (port ${YELLOW}9443${RESET})"
-echo -e "    - Dockge        (port ${YELLOW}5001${RESET})"
+echo -e "    - Socket Proxy          (internal only)"
+echo -e "    - Dockge                (port ${YELLOW}5001${RESET})"
+echo -e "    - Homepage              (port ${YELLOW}3000${RESET})"
+echo -e "    - NGINX Proxy Manager   (ports ${YELLOW}80, 443, 81${RESET})"
+
+if [[ "$INSTALL_PORTAINER" == "y" ]]; then
+  echo -e "    - Portainer CE          (port ${YELLOW}9443${RESET})"
+fi
+
 echo
-read -rp "$(echo -e "${BOLD}Proceed with these settings? [y/N]: ${RESET}")" CONFIRM
+read -rp "$(echo -e "${BOLD}Proceed with these settings? [y/N]: ${RESET}")" CONFIRM < /dev/tty
 echo
 
 if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
@@ -300,9 +370,9 @@ fi
 # =============================================================================
 
 # -----------------------------------------------------------------------------
-# STEP 3 — Set hostname
+# STEP 3 — Set hostname and timezone
 # -----------------------------------------------------------------------------
-header "Setting Hostname"
+header "Setting Hostname and Timezone"
 hostnamectl set-hostname "$NEW_HOSTNAME"
 
 if grep -q "127.0.1.1" /etc/hosts; then
@@ -312,7 +382,6 @@ else
 fi
 success "Hostname set to: ${NEW_HOSTNAME}"
 
-# --- Set timezone ------------------------------------------------------------
 timedatectl set-timezone "$TIMEZONE"
 success "Timezone set to: ${TIMEZONE}"
 
@@ -323,19 +392,13 @@ header "User Account"
 if [[ "$USER_EXISTS" == false ]]; then
   info "Creating user '${USERNAME}'..."
   useradd -m -s /bin/bash "$USERNAME"
-
-  # Set password via stdin — never exposed in process list or logs
   echo "${USERNAME}:${PASSWORD}" | chpasswd
-
-  # Clear password variable immediately after use
   PASSWORD=""
-
   success "User '${USERNAME}' created with password set."
 else
   info "User '${USERNAME}' already exists — skipping creation."
 fi
 
-# Add to sudo group if not already a member
 if ! groups "$USERNAME" | grep -q "\bsudo\b"; then
   usermod -aG sudo "$USERNAME"
   success "User '${USERNAME}' added to sudo group."
@@ -344,7 +407,7 @@ else
 fi
 
 # -----------------------------------------------------------------------------
-# STEP 5 — SSH key authentication (passwordless login)
+# STEP 5 — SSH key authentication
 # -----------------------------------------------------------------------------
 header "SSH Key Authentication"
 USER_HOME=$(eval echo "~${USERNAME}")
@@ -356,9 +419,8 @@ chown "${USERNAME}:${USERNAME}" "$SSH_DIR"
 
 if [[ -n "$SSH_PUBKEY" ]]; then
   AUTHORIZED_KEYS="${SSH_DIR}/authorized_keys"
-
   if grep -qF "$SSH_PUBKEY" "$AUTHORIZED_KEYS" 2>/dev/null; then
-    info "SSH public key already present in authorized_keys — skipping."
+    info "SSH public key already present — skipping."
   else
     echo "$SSH_PUBKEY" >> "$AUTHORIZED_KEYS"
     chmod 600 "$AUTHORIZED_KEYS"
@@ -366,7 +428,7 @@ if [[ -n "$SSH_PUBKEY" ]]; then
     success "SSH public key added to ${AUTHORIZED_KEYS}."
   fi
 else
-  info "No SSH public key provided — skipping. Password login remains active."
+  info "No SSH public key provided — password login remains active."
 fi
 
 # -----------------------------------------------------------------------------
@@ -376,7 +438,7 @@ header "Generating GitHub SSH Key"
 GITHUB_KEY_PATH="${SSH_DIR}/id_ed25519_github"
 
 if [[ -f "$GITHUB_KEY_PATH" ]]; then
-  info "GitHub SSH key already exists at ${GITHUB_KEY_PATH} — skipping generation."
+  info "GitHub SSH key already exists — skipping generation."
 else
   sudo -u "$USERNAME" ssh-keygen -t ed25519 \
     -C "$GITHUB_EMAIL" \
@@ -385,7 +447,6 @@ else
   success "GitHub SSH key pair generated."
 fi
 
-# Configure ~/.ssh/config to use this key for GitHub automatically
 SSH_CONFIG="${SSH_DIR}/config"
 if ! grep -q "Host github.com" "$SSH_CONFIG" 2>/dev/null; then
   cat >> "$SSH_CONFIG" << EOF
@@ -404,7 +465,6 @@ else
   info "GitHub entry already exists in SSH config — skipping."
 fi
 
-# Store GitHub public key for display at the end
 GITHUB_PUBKEY=$(cat "${GITHUB_KEY_PATH}.pub")
 
 # -----------------------------------------------------------------------------
@@ -438,7 +498,7 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
 success "Prerequisites installed."
 
 # -----------------------------------------------------------------------------
-# STEP 9 — Install Docker CE (official apt method)
+# STEP 9 — Install Docker CE
 # -----------------------------------------------------------------------------
 header "Installing Docker CE"
 
@@ -495,34 +555,29 @@ success "Docker log limits configured (10MB max size, 3 files)."
 # -----------------------------------------------------------------------------
 header "Creating Docker Directory Structure"
 
-# Base directories
+USER_UID=$(id -u "$USERNAME")
+USER_GID=$(id -g "$USERNAME")
+
 mkdir -p "${DOCKER_BASE}"
 mkdir -p "${DOCKER_APPDATA}"
 mkdir -p "${DOCKER_VOLUMES}"
-
-# Per-stack appdata directories
 mkdir -p "${DOCKER_APPDATA}/socket-proxy"
-mkdir -p "${DOCKER_APPDATA}/portainer"
 mkdir -p "${DOCKER_APPDATA}/dockge"
-mkdir -p "${DOCKER_APPDATA}/dockge/stacks"   # Dockge manages stacks from here
+mkdir -p "${DOCKER_APPDATA}/dockge/stacks"
+mkdir -p "${DOCKER_APPDATA}/homepage"
+mkdir -p "${DOCKER_APPDATA}/homepage/config"
+mkdir -p "${DOCKER_APPDATA}/npm"
+
+if [[ "$INSTALL_PORTAINER" == "y" ]]; then
+  mkdir -p "${DOCKER_APPDATA}/portainer"
+fi
 
 success "Directories created."
-info "  ${DOCKER_BASE}"
-info "  ${DOCKER_APPDATA}"
-info "  ${DOCKER_VOLUMES}"
-info "  ${DOCKER_APPDATA}/socket-proxy"
-info "  ${DOCKER_APPDATA}/portainer"
-info "  ${DOCKER_APPDATA}/dockge"
-info "  ${DOCKER_APPDATA}/dockge/stacks"
 
 # -----------------------------------------------------------------------------
 # STEP 12 — Generate .env file
 # -----------------------------------------------------------------------------
 header "Generating Docker .env File"
-
-# Resolve PUID and PGID for the user
-USER_UID=$(id -u "$USERNAME")
-USER_GID=$(id -g "$USERNAME")
 
 cat > "${DOCKER_BASE}/.env" << EOF
 # =============================================================================
@@ -531,11 +586,8 @@ cat > "${DOCKER_BASE}/.env" << EOF
 # Generated : $(date '+%Y-%m-%d %H:%M:%S')
 # Host      : ${NEW_HOSTNAME}
 #
-# This file is sourced automatically by docker compose from the directory
-# where compose.yaml is run, OR referenced explicitly via --env-file.
-#
+# This file is sourced automatically by docker compose.
 # DO NOT commit this file to version control.
-# It is listed in .gitignore for this reason.
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -551,7 +603,7 @@ USERDIR=${USER_HOME}
 # Network
 # -----------------------------------------------------------------------------
 SERVER_LAN_IP=${SERVER_LAN_IP}
-# Local IP ranges for access control rules (used by Traefik, NGINX PM etc)
+ROUTER_IP=${ROUTER_IP}
 LOCAL_IPS=127.0.0.1/32,10.0.0.0/8,192.168.0.0/16,172.16.0.0/12
 
 # -----------------------------------------------------------------------------
@@ -563,16 +615,23 @@ VOLUMES=${DOCKER_VOLUMES}
 
 # -----------------------------------------------------------------------------
 # Socket Proxy
-# Docker socket proxy endpoint — containers use this instead of raw socket
 # -----------------------------------------------------------------------------
 DOCKER_HOST=tcp://socket-proxy:2375
 
 # -----------------------------------------------------------------------------
-# Container ports
-# Add new container ports here as your stack grows
+# Homepage Docker connection name
 # -----------------------------------------------------------------------------
-PORTAINER_PORT=9443
+DOCKER_CONNECTION_NAME=${DOCKER_CONNECTION_NAME}
+
+# -----------------------------------------------------------------------------
+# Container ports
+# -----------------------------------------------------------------------------
 DOCKGE_PORT=5001
+HOMEPAGE_PORT=3000
+NPM_HTTP_PORT=80
+NPM_HTTPS_PORT=443
+NPM_ADMIN_PORT=81
+PORTAINER_PORT=9443
 EOF
 
 chmod 600 "${DOCKER_BASE}/.env"
@@ -583,11 +642,9 @@ success ".env file generated at ${DOCKER_BASE}/.env"
 # STEP 13 — POSIX ACLs
 # -----------------------------------------------------------------------------
 header "Applying POSIX ACLs"
-info "Applying ACLs for '${USERNAME}' (UID=${USER_UID} GID=${USER_GID})..."
-
 chown -R "${USERNAME}:${USERNAME}" "${DOCKER_BASE}"
-setfacl -R -m u:"${USERNAME}":rwx "${DOCKER_BASE}"     # Apply to existing items
-setfacl -R -d -m u:"${USERNAME}":rwx "${DOCKER_BASE}"  # Default ACL for new items
+setfacl -R -m u:"${USERNAME}":rwx "${DOCKER_BASE}"
+setfacl -R -d -m u:"${USERNAME}":rwx "${DOCKER_BASE}"
 success "POSIX ACLs applied to ${DOCKER_BASE}."
 
 # -----------------------------------------------------------------------------
@@ -595,17 +652,12 @@ success "POSIX ACLs applied to ${DOCKER_BASE}."
 # -----------------------------------------------------------------------------
 header "Deploying Socket Proxy"
 
-# Write compose file
 cat > "${DOCKER_APPDATA}/socket-proxy/compose.yaml" << EOF
 # =============================================================================
 # Socket Proxy
 # =============================================================================
-# Sits between Docker socket and containers that need Docker API access.
-# Prevents direct access to /var/run/docker.sock — improves security by
-# exposing only the API endpoints each container actually needs.
-#
-# Portainer and Dockge connect via tcp://socket-proxy:2375 instead of
-# mounting the raw Docker socket directly.
+# Protects the Docker socket by acting as a firewall between containers
+# and the Docker API. Only the API endpoints listed below are accessible.
 # =============================================================================
 
 networks:
@@ -614,7 +666,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 192.168.91.0/24  # Internal Docker-only subnet
+        - subnet: 192.168.91.0/24
 
 services:
   socket-proxy:
@@ -624,77 +676,26 @@ services:
     networks:
       socket_proxy:
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro  # Read-only mount
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
-      # Allow read access for Portainer / Dockge visibility
-      - CONTAINERS=1   # List and inspect containers
-      - IMAGES=1       # List images
-      - INFO=1         # Docker system info
-      - NETWORKS=1     # List networks
-      - SERVICES=1     # List services
-      - TASKS=1        # List tasks
-      - VOLUMES=1      # List volumes
-      - EVENTS=1       # Stream events (needed for live updates)
-      - PING=1         # Health check endpoint
-      # Write operations — disabled by default for security
-      # Enable only if a specific container requires it
-      - POST=0         # Block all write/create/delete operations
+      - CONTAINERS=1
+      - IMAGES=1
+      - INFO=1
+      - NETWORKS=1
+      - SERVICES=1
+      - TASKS=1
+      - VOLUMES=1
+      - EVENTS=1
+      - PING=1
+      - POST=1
 EOF
 
 chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/socket-proxy"
-
-# Start socket proxy
 docker compose -f "${DOCKER_APPDATA}/socket-proxy/compose.yaml" up -d
 success "Socket Proxy deployed."
 
 # -----------------------------------------------------------------------------
-# STEP 15 — Deploy Portainer CE
-# -----------------------------------------------------------------------------
-header "Deploying Portainer CE"
-
-cat > "${DOCKER_APPDATA}/portainer/compose.yaml" << EOF
-# =============================================================================
-# Portainer CE
-# =============================================================================
-# Docker management UI — use for monitoring, visibility, and container logs.
-# Connects to Docker via Socket Proxy rather than raw Docker socket.
-#
-# UI: https://${SERVER_LAN_IP}:9443
-# Note: Self-signed certificate — browser will show a security warning.
-#       This is normal for a local install.
-# =============================================================================
-
-networks:
-  socket_proxy:
-    name: socket_proxy
-    external: true  # Joins the network created by socket-proxy stack
-
-services:
-  portainer:
-    image: portainer/portainer-ce:latest
-    container_name: portainer
-    restart: unless-stopped
-    networks:
-      - socket_proxy
-    ports:
-      - "\${PORTAINER_PORT:-9443}:9443"
-    volumes:
-      - ${DOCKER_APPDATA}/portainer:/data
-    environment:
-      - DOCKER_HOST=tcp://socket-proxy:2375
-    command: --http-disabled  # HTTPS only
-EOF
-
-chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/portainer"
-
-docker compose \
-  --env-file "${DOCKER_BASE}/.env" \
-  -f "${DOCKER_APPDATA}/portainer/compose.yaml" \
-  up -d
-success "Portainer CE deployed."
-
-# -----------------------------------------------------------------------------
-# STEP 16 — Deploy Dockge
+# STEP 15 — Deploy Dockge
 # -----------------------------------------------------------------------------
 header "Deploying Dockge"
 
@@ -702,16 +703,9 @@ cat > "${DOCKER_APPDATA}/dockge/compose.yaml" << EOF
 # =============================================================================
 # Dockge
 # =============================================================================
-# Compose-file focused Docker management UI.
-# Point it at your stacks folder and it shows every compose.yaml as a
-# manageable stack — start, stop, edit, logs — all per compose file.
-# CLI and Dockge work alongside each other without conflict.
-#
+# Compose file management UI.
 # UI: http://${SERVER_LAN_IP}:5001
-#
 # Stacks folder: ${DOCKER_APPDATA}/dockge/stacks
-# Note: For Dockge to manage a stack, place its compose.yaml inside
-#       the stacks folder above, not in appdata directly.
 # =============================================================================
 
 networks:
@@ -729,23 +723,322 @@ services:
     ports:
       - "\${DOCKGE_PORT:-5001}:5001"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Dockge requires direct socket
+      - /var/run/docker.sock:/var/run/docker.sock
       - ${DOCKER_APPDATA}/dockge:/app/data
-      - ${DOCKER_APPDATA}/dockge/stacks:/opt/stacks  # Where Dockge looks for stacks
+      - ${DOCKER_APPDATA}/dockge/stacks:/opt/stacks
     environment:
       - DOCKGE_STACKS_DIR=/opt/stacks
 EOF
 
 chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/dockge"
-
 docker compose \
   --env-file "${DOCKER_BASE}/.env" \
   -f "${DOCKER_APPDATA}/dockge/compose.yaml" \
   up -d
 success "Dockge deployed."
 
+# -----------------------------------------------------------------------------
+# STEP 16 — Deploy Homepage
+# -----------------------------------------------------------------------------
+header "Deploying Homepage Dashboard"
+
+cat > "${DOCKER_APPDATA}/homepage/compose.yaml" << EOF
 # =============================================================================
-# STEP 17 — Final summary
+# Homepage Dashboard
+# =============================================================================
+# Homelab dashboard with Docker container auto-discovery via Socket Proxy.
+# UI: http://${SERVER_LAN_IP}:3000
+#
+# Config files: ${DOCKER_APPDATA}/homepage/config/
+# To update services: edit config/services.yaml then:
+#   docker compose -f ${DOCKER_APPDATA}/homepage/compose.yaml restart
+# =============================================================================
+
+networks:
+  socket_proxy:
+    name: socket_proxy
+    external: true
+
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    networks:
+      - socket_proxy
+    ports:
+      - "\${HOMEPAGE_PORT:-3000}:3000"
+    volumes:
+      - ${DOCKER_APPDATA}/homepage/config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - PUID=\${PUID}
+      - PGID=\${PGID}
+      - TZ=\${TZ}
+      - HOMEPAGE_ALLOWED_HOSTS=*
+EOF
+
+cat > "${DOCKER_APPDATA}/homepage/config/settings.yaml" << EOF
+# =============================================================================
+# Homepage - settings.yaml
+# =============================================================================
+title: ${NEW_HOSTNAME^^} - Home Lab Core
+description: Homelab dashboard
+layout:
+  columns: 3
+theme: dark
+color: slate
+hideSearch: false
+showStats: true
+hideUnlistedContainers: true
+fontSize: xl
+EOF
+
+cat > "${DOCKER_APPDATA}/homepage/config/docker.yaml" << EOF
+# =============================================================================
+# Homepage - docker.yaml
+# =============================================================================
+# Connects Homepage to Docker via Socket Proxy for container auto-discovery.
+# ${DOCKER_CONNECTION_NAME} is the label used in services.yaml server: entries.
+# =============================================================================
+${DOCKER_CONNECTION_NAME}:
+  host: socket-proxy
+  port: 2375
+EOF
+
+cat > "${DOCKER_APPDATA}/homepage/config/widgets.yaml" << EOF
+# =============================================================================
+# Homepage - widgets.yaml
+# =============================================================================
+- resources:
+    label: ${NEW_HOSTNAME^^}
+    cpu: true
+    memory: true
+    disk: /
+    expanded: true
+
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: long
+      timeStyle: short
+      hour12: true
+
+- search:
+    provider: duckduckgo
+    target: _blank
+EOF
+
+cat > "${DOCKER_APPDATA}/homepage/config/bookmarks.yaml" << EOF
+# =============================================================================
+# Homepage - bookmarks.yaml
+# =============================================================================
+- Homelab:
+  - GitHub Homelab Repo:
+    - abbr: GH
+      href: https://github.com/thirsty-fatman/homelab
+  - Router:
+    - abbr: RT
+      href: http://${ROUTER_IP}
+
+- Documentation:
+  - Docker Docs:
+    - abbr: DD
+      href: https://docs.docker.com
+  - Homepage Docs:
+    - abbr: HP
+      href: https://gethomepage.dev/latest/
+  - Ubuntu Server Docs:
+    - abbr: UB
+      href: https://ubuntu.com/server/docs
+EOF
+
+cat > "${DOCKER_APPDATA}/homepage/config/services.yaml" << EOF
+# =============================================================================
+# Homepage - services.yaml
+# =============================================================================
+# To add a new service copy a block and update the fields.
+# Restart after changes:
+#   docker compose -f ${DOCKER_APPDATA}/homepage/compose.yaml restart
+#
+# Auto-discovery labels for compose.yaml:
+#   labels:
+#     - homepage.group=Group Name
+#     - homepage.name=Service Name
+#     - homepage.icon=icon-name
+#     - homepage.href=http://x.x.x.x:port
+#     - homepage.description=Short description
+#     - homepage.server=${DOCKER_CONNECTION_NAME}
+#     - homepage.container=container_name
+# =============================================================================
+
+- Core Infrastructure:
+  - Homepage:
+      href: http://${SERVER_LAN_IP}:3000
+      description: This dashboard
+      server: ${DOCKER_CONNECTION_NAME}
+      container: homepage
+      icon: homepage.png
+
+  - Dockge:
+      href: http://${SERVER_LAN_IP}:5001
+      description: Compose stack management
+      server: ${DOCKER_CONNECTION_NAME}
+      container: dockge
+      icon: dockge.png
+
+  - NGINX Proxy Manager:
+      href: http://${SERVER_LAN_IP}:81
+      description: Reverse proxy manager
+      server: ${DOCKER_CONNECTION_NAME}
+      container: nginx-proxy-manager
+      icon: nginx-proxy-manager.png
+
+  - Socket Proxy:
+      description: Docker socket proxy (internal)
+      icon: docker.png
+
+# - Home Automation:
+#   - Home Assistant:
+#       href: http://x.x.x.x:8123
+#       description: Home automation platform
+#       server: ${DOCKER_CONNECTION_NAME}
+#       container: homeassistant
+#       icon: home-assistant.png
+#
+#   - Node-RED:
+#       href: http://x.x.x.x:1880
+#       description: Automation flow editor
+#       server: ${DOCKER_CONNECTION_NAME}
+#       container: nodered
+#       icon: node-red.png
+#
+#   - Mosquitto:
+#       description: MQTT broker (internal)
+#       server: ${DOCKER_CONNECTION_NAME}
+#       container: mosquitto
+#       icon: mosquitto.png
+
+# - Network:
+#   - Uptime Kuma:
+#       href: http://x.x.x.x:3001
+#       description: Service uptime monitoring
+#       server: ${DOCKER_CONNECTION_NAME}
+#       container: uptime-kuma
+#       icon: uptime-kuma.png
+EOF
+
+chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/homepage"
+docker compose \
+  --env-file "${DOCKER_BASE}/.env" \
+  -f "${DOCKER_APPDATA}/homepage/compose.yaml" \
+  up -d
+success "Homepage dashboard deployed."
+
+# -----------------------------------------------------------------------------
+# STEP 17 — Deploy NGINX Proxy Manager
+# -----------------------------------------------------------------------------
+header "Deploying NGINX Proxy Manager"
+
+cat > "${DOCKER_APPDATA}/npm/compose.yaml" << EOF
+# =============================================================================
+# NGINX Proxy Manager
+# =============================================================================
+# Reverse proxy with SSL certificate management via Let's Encrypt.
+# Connects to Docker via Socket Proxy network.
+#
+# Admin UI : http://${SERVER_LAN_IP}:81
+# HTTP     : port 80
+# HTTPS    : port 443
+#
+# Default credentials (change immediately on first login):
+#   Email    : admin@example.com
+#   Password : changeme
+#
+# SSL certificates: use DNS challenge with Cloudflare API token
+# for wildcard certificates that work without external access.
+# =============================================================================
+
+networks:
+  socket_proxy:
+    name: socket_proxy
+    external: true
+
+services:
+  nginx-proxy-manager:
+    image: jc21/nginx-proxy-manager:latest
+    container_name: nginx-proxy-manager
+    restart: unless-stopped
+    networks:
+      - socket_proxy
+    ports:
+      - "\${NPM_HTTP_PORT:-80}:80"
+      - "\${NPM_HTTPS_PORT:-443}:443"
+      - "\${NPM_ADMIN_PORT:-81}:81"
+    volumes:
+      - \${APPDATA}/npm/data:/data
+      - \${APPDATA}/npm/letsencrypt:/etc/letsencrypt
+    environment:
+      - PUID=\${PUID}
+      - PGID=\${PGID}
+      - TZ=\${TZ}
+EOF
+
+chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/npm"
+docker compose \
+  --env-file "${DOCKER_BASE}/.env" \
+  -f "${DOCKER_APPDATA}/npm/compose.yaml" \
+  up -d
+success "NGINX Proxy Manager deployed."
+
+# -----------------------------------------------------------------------------
+# STEP 18 — Deploy Portainer (optional)
+# -----------------------------------------------------------------------------
+if [[ "$INSTALL_PORTAINER" == "y" ]]; then
+  header "Deploying Portainer CE"
+
+  cat > "${DOCKER_APPDATA}/portainer/compose.yaml" << EOF
+# =============================================================================
+# Portainer CE
+# =============================================================================
+# Docker management UI — use for monitoring and visibility.
+# Connects to Docker via Socket Proxy.
+#
+# UI: https://${SERVER_LAN_IP}:9443
+# Note: Self-signed certificate — browser will show a security warning.
+# =============================================================================
+
+networks:
+  socket_proxy:
+    name: socket_proxy
+    external: true
+
+services:
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    networks:
+      - socket_proxy
+    ports:
+      - "\${PORTAINER_PORT:-9443}:9443"
+    volumes:
+      - ${DOCKER_APPDATA}/portainer:/data
+    environment:
+      - DOCKER_HOST=tcp://socket-proxy:2375
+    command: --http-disabled
+EOF
+
+  chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/portainer"
+  docker compose \
+    --env-file "${DOCKER_BASE}/.env" \
+    -f "${DOCKER_APPDATA}/portainer/compose.yaml" \
+    up -d
+  success "Portainer CE deployed."
+fi
+
+# =============================================================================
+# STEP 19 — Final summary
 # =============================================================================
 MACHINE_IP=$(hostname -I | awk '{print $1}')
 
@@ -765,12 +1058,17 @@ echo -e "  Volumes directory : ${GREEN}${DOCKER_VOLUMES}${RESET}"
 echo -e "  .env file         : ${GREEN}${DOCKER_BASE}/.env${RESET}"
 echo
 echo -e "  Stacks deployed:"
-echo -e "    Socket Proxy    : ${GREEN}running (internal)${RESET}"
-echo -e "    Portainer CE    : ${CYAN}https://${MACHINE_IP}:9443${RESET}"
-echo -e "    Dockge          : ${CYAN}http://${MACHINE_IP}:5001${RESET}"
+echo -e "    Socket Proxy          : ${GREEN}running (internal)${RESET}"
+echo -e "    Dockge                : ${CYAN}http://${MACHINE_IP}:5001${RESET}"
+echo -e "    Homepage              : ${CYAN}http://${MACHINE_IP}:3000${RESET}"
+echo -e "    NGINX Proxy Manager   : ${CYAN}http://${MACHINE_IP}:81${RESET}"
+
+if [[ "$INSTALL_PORTAINER" == "y" ]]; then
+  echo -e "    Portainer CE          : ${CYAN}https://${MACHINE_IP}:9443${RESET}"
+fi
+
 echo
 
-# --- SSH login reminder ------------------------------------------------------
 if [[ -n "$SSH_PUBKEY" ]]; then
   echo -e "${GREEN}  Passwordless SSH login is configured.${RESET}"
   echo -e "  Connect from Windows: ${CYAN}ssh ${USERNAME}@${MACHINE_IP}${RESET}"
@@ -781,7 +1079,6 @@ else
 fi
 echo
 
-# --- GitHub key instructions -------------------------------------------------
 echo -e "${BOLD}${YELLOW}  ACTION REQUIRED — Add GitHub SSH key${RESET}"
 echo -e "  Copy the key below and add it to GitHub:"
 echo -e "  ${CYAN}https://github.com/settings/ssh/new${RESET}"
@@ -796,10 +1093,13 @@ echo -e "  Once added, test with:  ${CYAN}ssh -T git@github.com${RESET}"
 echo -e "  Then clone your repo:   ${CYAN}git clone git@github.com:thirsty-fatman/homelab.git${RESET}"
 echo
 
-echo -e "${YELLOW}  Other important notes:${RESET}"
+echo -e "${YELLOW}  Next steps:${RESET}"
 echo -e "  - Log out and back in (or reboot) for docker group membership to take effect"
-echo -e "  - Portainer uses a self-signed certificate — browser warning is normal"
+echo -e "  - NPM default login: admin@example.com / changeme — change immediately"
+echo -e "  - Set up Cloudflare DNS challenge in NPM for wildcard SSL certificate"
+echo -e "  - Add proxy hosts in NPM for each service"
+echo -e "  - Update Homepage services.yaml URLs to use your domain once NPM is configured"
 echo -e "  - Dockge stacks folder: ${DOCKER_APPDATA}/dockge/stacks"
-echo -e "  - Deploy other stacks via CLI: cd ${DOCKER_APPDATA}/<service> && docker compose up -d"
-echo -e "  - Use ${DOCKER_BASE}/.env as your single source of truth for all stack variables"
+echo -e "  - Homepage config: ${DOCKER_APPDATA}/homepage/config/"
+echo -e "  - Use ${DOCKER_BASE}/.env as single source of truth for all stack variables"
 echo
