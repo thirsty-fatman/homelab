@@ -1,0 +1,95 @@
+# =============================================================================
+# .gitignore for homelab repo
+# Covers: secrets, Docker env files, OS junk, editor temp files
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# SECRETS & SENSITIVE FILES — never commit these
+# -----------------------------------------------------------------------------
+*.env
+.env
+.env.*
+!.env.example          # Allow example/template env files to be committed
+
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+secrets/
+secrets.yaml
+secrets.yml
+
+# -----------------------------------------------------------------------------
+# AUTOINSTALL — personal copies stay off repo
+# -----------------------------------------------------------------------------
+autoinstall/user-data
+autoinstall/meta-data
+
+# -----------------------------------------------------------------------------
+# DOCKER — runtime and temp files
+# -----------------------------------------------------------------------------
+*.log
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# -----------------------------------------------------------------------------
+# LINUX — temp and system files
+# -----------------------------------------------------------------------------
+*~
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+.nfs*
+
+# -----------------------------------------------------------------------------
+# WINDOWS — OS junk files
+# -----------------------------------------------------------------------------
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# -----------------------------------------------------------------------------
+# MACOS — OS junk files
+# -----------------------------------------------------------------------------
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# -----------------------------------------------------------------------------
+# VISUAL STUDIO CODE
+# -----------------------------------------------------------------------------
+.vscode/*
+!.vscode/settings.json    # Allow shared editor settings if desired
+!.vscode/extensions.json  # Allow shared extension recommendations if desired
+*.code-workspace
+
+# -----------------------------------------------------------------------------
+# PYTHON (for any utility scripts)
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# -----------------------------------------------------------------------------
+# MISC
+# -----------------------------------------------------------------------------
+*.zip
+*.tar.gz
+*.gz
