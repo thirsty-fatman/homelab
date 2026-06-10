@@ -2,11 +2,14 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.8.0
+# Version  : 1.8.1
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.8.1 - 2026-06-10 - Updated generated services.yaml order to match
+#                         preferred layout. Portainer always included
+#                         (active or commented based on install choice).
 #   1.8.0 - 2026-06-10 - Added post-setup optional configuration menu.
 #                         Options to run cloudflare-setup.sh and npm-setup.sh
 #                         inline or later. NPM option validates Cloudflare
@@ -904,6 +907,10 @@ cat > "${DOCKER_APPDATA}/homepage/config/services.yaml" << EOF
 # Restart after changes:
 #   docker compose -f ${DOCKER_APPDATA}/homepage/compose.yaml restart
 #
+# Note: URLs are initially set to IP:port format.
+# After running npm-setup.sh, URLs are automatically updated to
+# https://service.domain format. Manual overrides are preserved.
+#
 # Auto-discovery labels for compose.yaml:
 #   labels:
 #     - homepage.group=Group Name
@@ -923,19 +930,26 @@ cat > "${DOCKER_APPDATA}/homepage/config/services.yaml" << EOF
       container: homepage
       icon: homepage.png
 
-  - Dockge:
-      href: http://${SERVER_LAN_IP}:5001
-      description: Compose stack management
-      server: ${DOCKER_CONNECTION_NAME}
-      container: dockge
-      icon: dockge.png
-
   - NGINX Proxy Manager:
       href: http://${SERVER_LAN_IP}:81
       description: Reverse proxy manager
       server: ${DOCKER_CONNECTION_NAME}
       container: nginx-proxy-manager
       icon: nginx-proxy-manager.png
+
+  - Portainer:
+      href: https://${SERVER_LAN_IP}:9443
+      description: Docker management UI
+      server: ${DOCKER_CONNECTION_NAME}
+      container: portainer
+      icon: portainer.png
+
+  - Dockge:
+      href: http://${SERVER_LAN_IP}:5001
+      description: Compose stack management
+      server: ${DOCKER_CONNECTION_NAME}
+      container: dockge
+      icon: dockge.png
 
   - Socket Proxy:
       description: Docker socket proxy (internal)
