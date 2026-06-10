@@ -9,7 +9,9 @@ Personal homelab configuration, setup scripts, and Docker compose files for Ubun
 ```
 homelab/
 ├── setup/
-│   └── server-setup.sh         # Post-install setup script for Ubuntu Server 24.04
+│   ├── server-setup.sh         # Post-install setup script for Ubuntu Server 24.04
+│   ├── cloudflare-setup.sh     # Cloudflare DNS A record configuration
+│   └── npm-setup.sh            # NGINX Proxy Manager SSL and proxy host setup
 ├── experimental/
 │   └── autoinstall/            # Unattended Ubuntu install — work in progress
 │       └── README.md
@@ -57,6 +59,12 @@ Replace `yourusername` with the username created during Ubuntu install and `x.x.
 Accept the fingerprint prompt the first time by typing `yes`.
 
 > **Note:** All commands from Step 3 onwards are run on the Ubuntu server inside this SSH session — not on your local machine.
+
+> **If you get a `WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED` error** (e.g. after a reinstall):
+> ```bash
+> ssh-keygen -R x.x.x.x
+> ```
+> Then SSH in again as normal.
 
 ---
 
@@ -106,7 +114,20 @@ A full confirmation summary is shown before anything is changed. Type `y` to pro
 
 ---
 
-### Step 6 — Add the GitHub SSH key (if applicable)
+### Step 6 — Post-setup configuration menu
+
+After all stacks are deployed, the script offers optional additional configuration:
+
+| Option | Action |
+|--------|--------|
+| 1 | Run Cloudflare DNS setup then NPM setup (recommended) |
+| 2 | Run Cloudflare DNS setup only — will ask about NPM after |
+| 3 | Run NPM setup only — validates Cloudflare has been run first |
+| 4 | Skip — run scripts manually later (commands shown in summary) |
+
+---
+
+### Step 7 — Add the GitHub SSH key (if applicable)
 
 If you chose to set up GitHub SSH authentication, a public key is displayed at the end of the script. Copy it and add it to GitHub:
 
@@ -120,8 +141,6 @@ Test the connection from the server:
 ```bash
 ssh -T git@github.com
 ```
-
-You should see: `Hi yourusername! You've successfully authenticated...`
 
 Then clone this repo:
 
@@ -141,6 +160,57 @@ git clone git@github.com:yourusername/homelab.git ~/homelab
 | Homepage | Homelab dashboard with container auto-discovery | `http://<ip>:3000` |
 | NGINX Proxy Manager | Reverse proxy with SSL certificate management | `http://<ip>:81` |
 | Portainer CE | Docker management UI (optional) | `https://<ip>:9443` |
+
+---
+
+## Additional Setup Scripts
+
+### cloudflare-setup.sh
+
+Configures Cloudflare DNS A records for all homelab services. Safe to re-run — creates, updates, or skips records as needed.
+
+**What it does:**
+- Validates your Cloudflare API token
+- Looks up the Zone ID for your domain automatically
+- Creates or updates DNS A records for each service pointing to your server IP
+- Saves token, domain, and Zone ID to `/opt/docker/.env` for use by other scripts
+
+**Usage:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/cloudflare-setup.sh -o cloudflare-setup.sh
+sudo bash cloudflare-setup.sh
+```
+
+**Requirements:**
+- A Cloudflare account with your domain added
+- A Cloudflare API token with Edit zone DNS permissions scoped to your domain
+- Generate at: https://dash.cloudflare.com/profile/api-tokens
+
+---
+
+### npm-setup.sh
+
+Configures NGINX Proxy Manager via its REST API. Safe to re-run — creates, updates, or skips as needed.
+
+**What it does:**
+- Reads domain, server IP, and Cloudflare token from `/opt/docker/.env` (prompts if missing)
+- Waits for NPM to be healthy before proceeding
+- Changes default admin credentials to your supplied email and password
+- Creates a wildcard SSL certificate via Cloudflare DNS challenge
+- Creates proxy hosts for all core services with SSL and HTTP/2
+- Updates Homepage `services.yaml` with `https://service.domain` URLs (preserves manual overrides)
+- Restarts Homepage to apply URL changes
+
+**Usage:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/thirsty-fatman/homelab/main/setup/npm-setup.sh -o npm-setup.sh
+sudo bash npm-setup.sh
+```
+
+**Requirements:**
+- NPM container must be running
+- `cloudflare-setup.sh` must have been run first (or token/domain will be prompted)
+- Your domain's DNS must be managed by Cloudflare
 
 ---
 
@@ -187,6 +257,9 @@ DOCKER_CONNECTION_NAME=server-docker
 DOCKERDIR=/opt/docker
 APPDATA=/opt/docker/appdata
 VOLUMES=/opt/docker/volumes
+CLOUDFLARE_TOKEN=yourtoken
+DOMAIN=yourdomain.com
+ZONE_ID=yourzoneid
 ```
 
 Reference these variables in any compose file:
@@ -200,7 +273,7 @@ volumes:
   - ${APPDATA}/myservice:/config
 ```
 
-> **Never commit `.env` to version control** — it contains your server's IP address and personal details. It is listed in `.gitignore`.
+> **Never commit `.env` to version control** — it contains your server's IP address, domain, and Cloudflare token. It is listed in `.gitignore`.
 
 ---
 
@@ -219,18 +292,6 @@ nano /opt/docker/appdata/myservice/compose.yaml
 cd /opt/docker/appdata/myservice
 docker compose --env-file /opt/docker/.env up -d
 ```
-
----
-
-## NGINX Proxy Manager — First Login
-
-After the script completes, NPM needs to be configured before use:
-
-1. Open `http://<server-ip>:81`
-2. Default credentials: `admin@example.com` / `changeme`
-3. Change email and password immediately when prompted
-4. Set up a wildcard SSL certificate using Cloudflare DNS challenge for your domain
-5. Add proxy hosts for each service to get clean URLs without port numbers
 
 ---
 
