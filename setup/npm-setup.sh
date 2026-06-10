@@ -2,11 +2,13 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.0.0
+# Version  : 1.1.0
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.1.0 - 2026-06-10 - Fixed authentication order. Added targeted
+#                         services.yaml URL update after proxy hosts created.
 #   1.0.0 - 2026-06-10 - Initial release
 #
 # Description:
@@ -323,15 +325,16 @@ done
 success "NPM is ready."
 
 # -----------------------------------------------------------------------------
-# STEP 4 — Authenticate with default credentials
+# STEP 4 — Authenticate with NPM
 # -----------------------------------------------------------------------------
 header "Authenticating with NPM"
-info "Logging in with default credentials..."
 
+# Try supplied credentials first — handles case where credentials already changed
+info "Logging in with supplied credentials..."
 AUTH_RESPONSE=$(curl -s -X POST \
   "${NPM_URL}/api/tokens" \
   -H "Content-Type: application/json" \
-  --data '{"identity":"admin@example.com","secret":"changeme","expiry":"1d"}')
+  --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\",\"expiry\":\"1d\"}")
 
 NPM_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "
 import sys, json
@@ -339,13 +342,16 @@ d = json.load(sys.stdin)
 print(d.get('token', ''))
 " 2>/dev/null || echo "")
 
-if [[ -z "$NPM_TOKEN" ]]; then
-  # Try with user-supplied credentials in case already changed
-  info "Default credentials failed — trying supplied credentials..."
+if [[ -n "$NPM_TOKEN" ]]; then
+  success "Authenticated with supplied credentials — skipping credential update."
+  SKIP_CRED_UPDATE=true
+else
+  # Fall back to default credentials
+  info "Supplied credentials failed — trying default credentials..."
   AUTH_RESPONSE=$(curl -s -X POST \
     "${NPM_URL}/api/tokens" \
     -H "Content-Type: application/json" \
-    --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\",\"expiry\":\"1d\"}")
+    --data '{"identity":"admin@example.com","secret":"changeme","expiry":"1d"}')
 
   NPM_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "
 import sys, json
@@ -354,13 +360,10 @@ print(d.get('token', ''))
 " 2>/dev/null || echo "")
 
   if [[ -z "$NPM_TOKEN" ]]; then
-    error "Could not authenticate with NPM."
-    error "If you have already changed the default credentials, please reset NPM data and try again."
+    error "Could not authenticate with NPM using supplied or default credentials."
+    error "Please check your email and password and try again."
     exit 1
   fi
-  success "Authenticated with supplied credentials — skipping credential update."
-  SKIP_CRED_UPDATE=true
-else
   success "Authenticated with default credentials."
   SKIP_CRED_UPDATE=false
 fi
@@ -603,6 +606,76 @@ print(d.get('error', {}).get('message', 'Unknown error'))
     warn "Failed to create proxy host for ${FQDN}: ${ERROR_MSG}"
   fi
 done
+
+
+# =============================================================================
+# STEP 8 — Update Homepage services.yaml with domain URLs
+# =============================================================================
+header "Updating Homepage services.yaml"
+
+SERVICES_FILE="/opt/docker/appdata/homepage/config/services.yaml"
+
+if [[ ! -f "$SERVICES_FILE" ]]; then
+  warn "Homepage services.yaml not found at ${SERVICES_FILE} — skipping URL update."
+else
+  info "Updating IP:port URLs to domain URLs (preserving manual overrides)..."
+
+  # Use python3 to do targeted line-by-line replacement
+  # Only replaces href values that still contain an IP address
+  # Preserves any manually set domain URLs
+  python3 - "${SERVICES_FILE}" "${DOMAIN}" << 'PYEOF'
+import re, sys
+
+services_file = sys.argv[1]
+domain = sys.argv[2]
+
+service_urls = {
+    'homepage': 'https://homepage.' + domain,
+    'dockge': 'https://dockge.' + domain,
+    'nginx-proxy-manager': 'https://npm.' + domain,
+    'portainer': 'https://portainer.' + domain,
+}
+
+with open(services_file, 'r') as f:
+    lines = f.readlines()
+
+updated = 0
+current_container = None
+new_lines = []
+
+for line in lines:
+    container_match = re.search(r'container:\s*(\S+)', line)
+    if container_match:
+        current_container = container_match.group(1)
+
+    href_ip_match = re.match(r'^(\s+href:\s+)https?://(\d{1,3}\.){3}\d{1,3}(:\d+)?', line)
+    if href_ip_match and current_container and current_container in service_urls:
+        new_url = service_urls[current_container]
+        new_line = re.sub(r'href:\s+\S+', 'href: ' + new_url, line)
+        if new_line != line:
+            new_lines.append(new_line)
+            updated += 1
+            continue
+
+    new_lines.append(line)
+
+with open(services_file, 'w') as f:
+    f.writelines(new_lines)
+
+print(f'Updated {updated} href(s) to domain URLs.')
+PYEOF
+
+  if [[ $? -eq 0 ]]; then
+    success "Homepage services.yaml updated with domain URLs."
+    if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^homepage$"; then
+      docker restart homepage
+      success "Homepage restarted to apply URL changes."
+    fi
+  else
+    warn "Could not update services.yaml — update manually if needed."
+  fi
+fi
+
 
 # =============================================================================
 # Final summary
