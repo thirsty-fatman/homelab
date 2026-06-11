@@ -2,11 +2,20 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.2.0
+# Version  : 1.3.0
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.3.0 - 2026-06-12 - Removed unreliable certificate-creation API call
+#                         (POST /api/nginx/certificates returns "data/meta
+#                         must NOT have additional properties" on current
+#                         NPM versions - known upstream issue). Script now
+#                         only DETECTS an existing wildcard certificate via
+#                         GET /api/nginx/certificates (read-only, unaffected)
+#                         and uses it for proxy hosts. If no certificate
+#                         exists, prints step-by-step web UI instructions to
+#                         create it once, then re-run this script.
 #   1.2.0 - 2026-06-11 - Fixed: removed invalid "expiry" field from all
 #                         /api/tokens auth requests (NPM 2.15+ rejects it
 #                         with "data must NOT have additional properties").
@@ -31,11 +40,12 @@
 # What this script does:
 #   1. Reads or prompts for domain, server IP, Cloudflare token
 #   2. Waits for NPM API to be healthy (up to 60 seconds)
-#   3. Authenticates with NPM default credentials
-#   4. Changes admin email and password
-#   5. Creates wildcard SSL certificate via Cloudflare DNS challenge
-#   6. Waits for certificate to be issued (up to 120 seconds)
-#   7. Creates proxy hosts for all core services
+#   3. Authenticates with NPM using the credentials from its web UI
+#      first-run setup (NPM 2.15+ has no default account)
+#   4. Detects an existing wildcard certificate for *.<domain> (must be
+#      created once via NPM's web UI - instructions printed if missing)
+#   5. Creates proxy hosts for all core services using that certificate
+#   6. Updates Homepage services.yaml with https://service.domain URLs
 #
 # Usage:
 #   sudo bash npm-setup.sh
@@ -456,11 +466,17 @@ print(d.get('token', ''))
 fi
 
 # -----------------------------------------------------------------------------
-# STEP 6 — Create wildcard SSL certificate
+# STEP 6 — Detect wildcard SSL certificate
 # -----------------------------------------------------------------------------
-header "Creating Wildcard SSL Certificate"
+header "Checking for Wildcard SSL Certificate"
 
-# Check if cert already exists
+# NPM's certificate creation API (POST /api/nginx/certificates) has known
+# schema validation issues across recent versions ("data/meta must NOT have
+# additional properties") that make automated DNS-challenge cert creation
+# unreliable. Certificate creation is a one-time task, so this script only
+# DETECTS an existing certificate (read-only API call, unaffected by the
+# schema issue) and uses it for proxy hosts. If not found, instructions are
+# given to create it via the web UI.
 CERTS_RESPONSE=$(npm_api_auth GET "nginx/certificates")
 CERT_ID=$(echo "$CERTS_RESPONSE" | python3 -c "
 import sys, json
@@ -474,72 +490,24 @@ if isinstance(d, list):
 " 2>/dev/null || echo "")
 
 if [[ -n "$CERT_ID" ]]; then
-  success "Wildcard certificate for *.${DOMAIN} already exists (ID: ${CERT_ID}) — skipping."
+  success "Found wildcard certificate for *.${DOMAIN} (ID: ${CERT_ID})."
 else
-  info "Requesting wildcard certificate for *.${DOMAIN} via Cloudflare DNS challenge..."
-
-  CERT_DATA=$(python3 -c "
-import json
-print(json.dumps({
-    'provider': 'letsencrypt',
-    'domain_names': ['*.${DOMAIN}'],
-    'meta': {
-        'letsencrypt_email': '${NPM_EMAIL}',
-        'letsencrypt_agree': True,
-        'dns_challenge': True,
-        'dns_provider': 'cloudflare',
-        'dns_provider_credentials': 'dns_cloudflare_api_token=${CLOUDFLARE_TOKEN}',
-        'propagation_seconds': ''
-    }
-}))
-")
-
-  CERT_RESPONSE=$(npm_api_auth POST "nginx/certificates" "$CERT_DATA")
-  CERT_ID=$(echo "$CERT_RESPONSE" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('id', ''))
-" 2>/dev/null || echo "")
-
-  if [[ -z "$CERT_ID" ]]; then
-    error "Failed to request SSL certificate."
-    ERROR_MSG=$(echo "$CERT_RESPONSE" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('error', {}).get('message', 'Unknown error'))
-" 2>/dev/null || echo "Unknown error")
-    error "Error: ${ERROR_MSG}"
-    exit 1
-  fi
-
-  # Wait for certificate to be issued
-  info "Waiting for certificate to be issued (max 120 seconds)..."
-  CERT_ATTEMPTS=0
-  CERT_MAX=24
-
-  while true; do
-    ((CERT_ATTEMPTS++))
-    if [[ $CERT_ATTEMPTS -ge $CERT_MAX ]]; then
-      error "Certificate was not issued within 120 seconds."
-      error "Check NPM logs: docker logs nginx-proxy-manager"
-      exit 1
-    fi
-
-    CERT_STATUS=$(npm_api_auth GET "nginx/certificates/${CERT_ID}")
-    CERT_VALID=$(echo "$CERT_STATUS" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-print(d.get('meta', {}).get('letsencrypt_email', '') != '' and 'expires_on' in d)
-" 2>/dev/null || echo "False")
-
-    if [[ "$CERT_VALID" == "True" ]]; then
-      success "Wildcard certificate issued successfully (ID: ${CERT_ID})"
-      break
-    fi
-
-    info "Certificate pending... (attempt ${CERT_ATTEMPTS}/${CERT_MAX})"
-    sleep 5
-  done
+  error "No certificate found for *.${DOMAIN}."
+  error ""
+  error "Certificate creation via API is unreliable on current NPM versions."
+  error "Create it once via the web UI, then re-run this script:"
+  error ""
+  error "  1. Open http://${SERVER_LAN_IP}:81"
+  error "  2. SSL Certificates -> Add SSL Certificate -> Let's Encrypt"
+  error "  3. Domain Names: *.${DOMAIN}"
+  error "  4. Email: your admin email"
+  error "  5. Toggle 'Use a DNS Challenge'"
+  error "  6. DNS Provider: Cloudflare"
+  error "  7. Credentials: dns_cloudflare_api_token=${CLOUDFLARE_TOKEN}"
+  error "  8. Agree to terms -> Save"
+  error ""
+  error "Then re-run: sudo bash npm-setup.sh"
+  exit 1
 fi
 
 # -----------------------------------------------------------------------------
