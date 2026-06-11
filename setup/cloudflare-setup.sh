@@ -2,11 +2,17 @@
 # =============================================================================
 # Cloudflare DNS Setup Script
 # =============================================================================
-# Version  : 1.0.0
+# Version  : 1.0.1
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.0.1 - 2026-06-12 - Fixed "((var++))" arithmetic expressions which exit
+#                         non-zero (triggering set -e abort) when var=0 -
+#                         the very first increment of any counter starting
+#                         at 0. Replaced all with "var=$((var + 1))" form.
+#                         This caused npm-setup.sh to silently exit after
+#                         processing only the first proxy host.
 #   1.0.0 - 2026-06-10 - Initial release
 #
 # Description:
@@ -111,7 +117,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Cloudflare DNS Setup"
-echo "   v1.0.0 | 2026-06-10"
+echo "   v1.0.1 | 2026-06-12"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "This script creates or updates DNS A records in Cloudflare"
@@ -312,7 +318,7 @@ print(json.dumps({
     CREATE_SUCCESS=$(echo "$CREATE_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "False")
     if [[ "$CREATE_SUCCESS" == "True" ]]; then
       success "Created: ${FQDN} → ${SERVER_LAN_IP}"
-      ((CREATED++))
+      CREATED=$((CREATED + 1))
     else
       ERROR_MSG=$(echo "$CREATE_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['errors'][0]['message'] if d.get('errors') else 'Unknown error')" 2>/dev/null || echo "Unknown error")
       warn "Failed to create ${FQDN}: ${ERROR_MSG}"
@@ -320,14 +326,14 @@ print(json.dumps({
   elif [[ "$EXISTING_IP" == "$SERVER_LAN_IP" ]]; then
     # Record exists with correct IP — skip
     success "Already correct: ${FQDN} → ${SERVER_LAN_IP} (skipped)"
-    ((SKIPPED++))
+    SKIPPED=$((SKIPPED + 1))
   else
     # Record exists with different IP — update it
     UPDATE_RESPONSE=$(cf_api PUT "zones/${ZONE_ID}/dns_records/${EXISTING_ID}" "$RECORD_DATA")
     UPDATE_SUCCESS=$(echo "$UPDATE_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('success', False))" 2>/dev/null || echo "False")
     if [[ "$UPDATE_SUCCESS" == "True" ]]; then
       success "Updated: ${FQDN} → ${SERVER_LAN_IP} (was ${EXISTING_IP})"
-      ((UPDATED++))
+      UPDATED=$((UPDATED + 1))
     else
       ERROR_MSG=$(echo "$UPDATE_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['errors'][0]['message'] if d.get('errors') else 'Unknown error')" 2>/dev/null || echo "Unknown error")
       warn "Failed to update ${FQDN}: ${ERROR_MSG}"
