@@ -2,11 +2,17 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.3.0
+# Version  : 1.3.1
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.3.1 - 2026-06-12 - Fixed "((var++))" arithmetic expressions which exit
+#                         non-zero (triggering set -e abort) when var=0 -
+#                         the very first increment of any counter starting
+#                         at 0. Replaced all with "var=$((var + 1))" form.
+#                         This caused npm-setup.sh to silently exit after
+#                         processing only the first proxy host.
 #   1.3.0 - 2026-06-12 - Removed unreliable certificate-creation API call
 #                         (POST /api/nginx/certificates returns "data/meta
 #                         must NOT have additional properties" on current
@@ -160,7 +166,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   NGINX Proxy Manager Setup"
-echo "   v1.0.0 | 2026-06-10"
+echo "   v1.3.1 | 2026-06-12"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "This script configures NPM via its API — sets admin credentials,"
@@ -336,7 +342,7 @@ info "Polling NPM API health endpoint (max 60 seconds)..."
 ATTEMPTS=0
 MAX_ATTEMPTS=12
 until curl -s "${NPM_URL}/api/" &>/dev/null; do
-  ((ATTEMPTS++))
+  ATTEMPTS=$((ATTEMPTS + 1))
   if [[ $ATTEMPTS -ge $MAX_ATTEMPTS ]]; then
     error "NPM did not become ready within 60 seconds."
     error "Check if the nginx-proxy-manager container is running: docker ps"
@@ -550,7 +556,7 @@ if isinstance(d, list):
 
   if [[ -n "$EXISTING_HOST_ID" ]]; then
     success "Already exists: ${FQDN} (skipped)"
-    ((SKIPPED++))
+    SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
@@ -581,7 +587,7 @@ print(d.get('id', ''))
 
   if [[ -n "$NEW_ID" ]]; then
     success "Created: https://${FQDN} → ${SCHEME}://${FORWARD_HOST}:${FORWARD_PORT}"
-    ((CREATED++))
+    CREATED=$((CREATED + 1))
   else
     ERROR_MSG=$(echo "$CREATE_RESPONSE" | python3 -c "
 import sys, json
