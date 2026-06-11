@@ -2,11 +2,16 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.8.1
+# Version  : 1.8.2
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.8.2 - 2026-06-11 - Detect existing authorized_keys before prompting for
+#                         SSH public key. If keys are already present (e.g.
+#                         populated via GitHub .keys download before running
+#                         this script), show them and skip the manual paste
+#                         prompt unless the user opts to add a different key.
 #   1.8.1 - 2026-06-10 - Updated generated services.yaml order to match
 #                         preferred layout. Portainer always included
 #                         (active or commented based on install choice).
@@ -236,7 +241,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Ubuntu Server 24.04 - Post-Install Setup"
-echo "   v1.5.0 | 2026-06-10"
+echo "   v1.8.2 | 2026-06-11"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "For each question, press ${YELLOW}Enter${RESET} to accept the default,"
@@ -264,9 +269,54 @@ fi
 
 # --- SSH public key ----------------------------------------------------------
 header "SSH Key Authentication (Passwordless Login)"
-echo -e "  To get your public key on Windows, run in PowerShell:"
-echo -e "  ${CYAN}cat ~/.ssh/id_ed25519.pub${RESET}\n"
-prompt_ssh_pubkey SSH_PUBKEY
+
+# Check if authorized_keys already has content (e.g. populated via GitHub
+# download one-liner before running this script)
+EXISTING_AUTH_KEYS=""
+SSH_PUBKEY=""
+SKIP_PUBKEY_PROMPT=false
+
+# Determine the home directory to check — depends on whether user exists yet
+if [[ "$USER_EXISTS" == true ]]; then
+  CHECK_HOME=$(eval echo "~${USERNAME}")
+else
+  CHECK_HOME="$HOME"
+fi
+
+CHECK_AUTH_FILE="${CHECK_HOME}/.ssh/authorized_keys"
+
+if [[ -s "$CHECK_AUTH_FILE" ]] 2>/dev/null; then
+  EXISTING_AUTH_KEYS=$(grep -E '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256)' "$CHECK_AUTH_FILE" 2>/dev/null || echo "")
+
+  if [[ -n "$EXISTING_AUTH_KEYS" ]]; then
+    KEY_COUNT=$(echo "$EXISTING_AUTH_KEYS" | wc -l)
+    info "Found ${KEY_COUNT} existing key(s) in ${CHECK_AUTH_FILE}:"
+    echo
+    while IFS= read -r line; do
+      # Show key type and a truncated fingerprint-ish preview for readability
+      KEY_TYPE=$(echo "$line" | awk '{print $1}')
+      KEY_COMMENT=$(echo "$line" | awk '{print $3}')
+      KEY_PREVIEW=$(echo "$line" | awk '{print $2}' | cut -c1-20)
+      echo -e "    ${CYAN}${KEY_TYPE}${RESET} ${KEY_PREVIEW}... ${KEY_COMMENT}"
+    done <<< "$EXISTING_AUTH_KEYS"
+    echo
+    read -rp "$(echo -e "${BOLD}Use existing key(s) as-is? [Y/n]: ${RESET}")" USE_EXISTING < /dev/tty
+    echo
+
+    if [[ ! "$USE_EXISTING" =~ ^[Nn]$ ]]; then
+      success "Using existing authorized_keys — skipping public key prompt."
+      SKIP_PUBKEY_PROMPT=true
+      # Use the first key found for SSH_PUBKEY (used later for summary/checks)
+      SSH_PUBKEY=$(echo "$EXISTING_AUTH_KEYS" | head -1)
+    fi
+  fi
+fi
+
+if [[ "$SKIP_PUBKEY_PROMPT" == false ]]; then
+  echo -e "  To get your public key on Windows, run in PowerShell:"
+  echo -e "  ${CYAN}cat ~/.ssh/id_ed25519.pub${RESET}\n"
+  prompt_ssh_pubkey SSH_PUBKEY
+fi
 
 # --- GitHub SSH key ----------------------------------------------------------
 header "GitHub SSH Key"
