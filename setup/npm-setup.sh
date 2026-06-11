@@ -2,11 +2,18 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.1.0
+# Version  : 1.2.0
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.2.0 - 2026-06-11 - Fixed: removed invalid "expiry" field from all
+#                         /api/tokens auth requests (NPM 2.15+ rejects it
+#                         with "data must NOT have additional properties").
+#                         NPM 2.15+ has no default admin@example.com/changeme
+#                         account — added upfront instructions to complete
+#                         NPM's web UI first-run setup before running this
+#                         script, and updated error message accordingly.
 #   1.1.0 - 2026-06-10 - Fixed authentication order. Added targeted
 #                         services.yaml URL update after proxy hosts created.
 #   1.0.0 - 2026-06-10 - Initial release
@@ -224,8 +231,14 @@ fi
 
 # --- NPM admin credentials ---------------------------------------------------
 header "NPM Admin Credentials"
-echo -e "  Set new credentials for the NPM admin account."
-echo -e "  These replace the default admin@example.com / changeme.\n"
+echo -e "  ${BOLD}NPM 2.15+ requires first-time setup via the web UI${RESET} — there is no"
+echo -e "  default admin@example.com / changeme account to authenticate against."
+echo -e ""
+echo -e "  If you haven't already, open ${CYAN}http://${SERVER_LAN_IP:-<server-ip>}:81${RESET} in a browser"
+echo -e "  now and complete the first-run form (name, email, password)."
+echo -e ""
+echo -e "  Enter the SAME email and password you used (or will use) there below —"
+echo -e "  this script authenticates with those credentials.\n"
 
 echo -e "${BOLD}Admin email address${RESET}"
 read -rp "  Email: " NPM_EMAIL < /dev/tty
@@ -334,7 +347,7 @@ info "Logging in with supplied credentials..."
 AUTH_RESPONSE=$(curl -s -X POST \
   "${NPM_URL}/api/tokens" \
   -H "Content-Type: application/json" \
-  --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\",\"expiry\":\"1d\"}")
+  --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\"}")
 
 NPM_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "
 import sys, json
@@ -351,7 +364,7 @@ else
   AUTH_RESPONSE=$(curl -s -X POST \
     "${NPM_URL}/api/tokens" \
     -H "Content-Type: application/json" \
-    --data '{"identity":"admin@example.com","secret":"changeme","expiry":"1d"}')
+    --data '{"identity":"admin@example.com","secret":"changeme"}')
 
   NPM_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "
 import sys, json
@@ -361,7 +374,11 @@ print(d.get('token', ''))
 
   if [[ -z "$NPM_TOKEN" ]]; then
     error "Could not authenticate with NPM using supplied or default credentials."
-    error "Please check your email and password and try again."
+    error ""
+    error "If this is a fresh NPM install (2.15+), it has no default account."
+    error "Open http://${SERVER_LAN_IP}:81 in a browser and complete the"
+    error "first-run setup form, then re-run this script using the SAME"
+    error "email and password you entered there."
     exit 1
   fi
   success "Authenticated with default credentials."
@@ -423,7 +440,7 @@ print('id' in d)
   AUTH_RESPONSE=$(curl -s -X POST \
     "${NPM_URL}/api/tokens" \
     -H "Content-Type: application/json" \
-    --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\",\"expiry\":\"1d\"}")
+    --data "{\"identity\":\"${NPM_EMAIL}\",\"secret\":\"${NPM_PASSWORD}\"}")
 
   NPM_TOKEN=$(echo "$AUTH_RESPONSE" | python3 -c "
 import sys, json
