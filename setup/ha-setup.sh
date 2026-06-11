@@ -2,11 +2,16 @@
 # =============================================================================
 # Home Assistant Stack Setup Script
 # =============================================================================
-# Version  : 1.0.0
+# Version  : 1.0.1
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.0.1 - 2026-06-10 - Fixed Zigbee2MQTT network (moved to iot_macvlan to
+#                         reach Mosquitto). Fixed secret.yaml to write actual
+#                         MQTT password instead of username placeholder.
+#                         Fixed invalid 'local' keyword used outside a function
+#                         in Matter dongle detection.
 #   1.0.0 - 2026-06-10 - Initial release
 #
 # Description:
@@ -244,7 +249,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Home Assistant Stack Setup"
-echo "   v1.0.0 | 2026-06-10"
+echo "   v1.0.1 | 2026-06-10"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "This script sets up Home Assistant and dependencies on OSAN."
@@ -312,7 +317,7 @@ elif [[ ${#MATTER_CANDIDATES[@]} -eq 1 ]]; then
   fi
 else
   echo -e "  Detected multiple new devices:"
-  local i=1
+  i=1
   for dev in "${MATTER_CANDIDATES[@]}"; do
     echo -e "    ${CYAN}${i}.${RESET} ${dev}"
     ((i++))
@@ -533,7 +538,6 @@ docker run --rm \
   eclipse-mosquitto:latest \
   mosquitto_passwd -c -b /mosquitto/config/passwd "$MQTT_USER" "$MQTT_PASSWORD"
 
-MQTT_PASSWORD=""
 success "Mosquitto config generated."
 
 # -----------------------------------------------------------------------------
@@ -633,13 +637,17 @@ cat > "${DOCKER_APPDATA}/zigbee2mqtt/secret.yaml" << EOF
 # =============================================================================
 # Referenced in configuration.yaml as !secret <key>
 # DO NOT commit this file to version control.
+#
+# This password is also stored in Bitwarden — update both if changed.
 # =============================================================================
-mqtt_password: ${MQTT_USER}
+mqtt_password: ${MQTT_PASSWORD}
 EOF
 
-# Note: secret.yaml stores the MQTT user as password placeholder
-# User will need to update this with actual password after setup
-# We clear the variable for security
+chmod 600 "${DOCKER_APPDATA}/zigbee2mqtt/secret.yaml"
+
+# Clear password variable now that it's been written where needed
+MQTT_PASSWORD=""
+
 success "Zigbee2MQTT config generated."
 
 # -----------------------------------------------------------------------------
@@ -650,8 +658,9 @@ cat > "${DOCKER_APPDATA}/zigbee2mqtt/compose.yaml" << EOF
 # Zigbee2MQTT
 # =============================================================================
 # Zigbee coordinator bridge using Sonoff Zigbee Dongle-P.
-# Communicates with Mosquitto via MQTT.
-# Internal only — no external ports exposed.
+# Communicates with Mosquitto via MQTT on the IoT macvlan network.
+# Internal only — no external ports exposed, no IP assigned (uses DHCP
+# from macvlan range, only needs outbound connectivity to Mosquitto).
 #
 # Web UI available internally at port 8080 (not exposed externally).
 # To access: docker exec -it zigbee2mqtt /bin/sh
@@ -660,8 +669,8 @@ cat > "${DOCKER_APPDATA}/zigbee2mqtt/compose.yaml" << EOF
 # =============================================================================
 
 networks:
-  socket_proxy:
-    name: socket_proxy
+  iot_macvlan:
+    name: iot_macvlan
     external: true
 
 services:
@@ -670,7 +679,7 @@ services:
     container_name: zigbee2mqtt
     restart: unless-stopped
     networks:
-      - socket_proxy
+      - iot_macvlan
     volumes:
       - \${APPDATA}/zigbee2mqtt:/app/data
     devices:
