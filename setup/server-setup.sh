@@ -2,11 +2,17 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.8.2
+# Version  : 1.8.3
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 #
 # Changelog:
+#   1.8.3 - 2026-06-12 - Fixed "((var++))" arithmetic expressions which exit
+#                         non-zero (triggering set -e abort) when var=0 -
+#                         the very first increment of any counter starting
+#                         at 0. Replaced all with "var=$((var + 1))" form.
+#                         This caused npm-setup.sh to silently exit after
+#                         processing only the first proxy host.
 #   1.8.2 - 2026-06-11 - Detect existing authorized_keys before prompting for
 #                         SSH public key. If keys are already present (e.g.
 #                         populated via GitHub .keys download before running
@@ -241,7 +247,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Ubuntu Server 24.04 - Post-Install Setup"
-echo "   v1.8.2 | 2026-06-11"
+echo "   v1.8.3 | 2026-06-12"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "For each question, press ${YELLOW}Enter${RESET} to accept the default,"
