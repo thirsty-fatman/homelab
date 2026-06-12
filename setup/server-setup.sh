@@ -2,11 +2,19 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.8.3
+# Version  : 1.8.4
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
+# Filename : server-setup.sh
 #
 # Changelog:
+#   1.8.4 - 2026-06-12 - CRITICAL: Pinned NGINX Proxy Manager image to
+#                         2.15.1 (was :latest). Newer NPM versions introduced
+#                         breaking changes (no default admin account,
+#                         certificate API schema errors) that broke
+#                         npm-setup.sh and the documented setup flow. 2.15.1
+#                         is the version this entire setup process is
+#                         documented and tested against.
 #   1.8.3 - 2026-06-12 - Fixed "((var++))" arithmetic expressions which exit
 #                         non-zero (triggering set -e abort) when var=0 -
 #                         the very first increment of any counter starting
@@ -247,7 +255,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Ubuntu Server 24.04 - Post-Install Setup"
-echo "   v1.8.3 | 2026-06-12"
+echo "   v1.8.4 | 2026-06-12"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "For each question, press ${YELLOW}Enter${RESET} to accept the default,"
@@ -1072,6 +1080,13 @@ cat > "${DOCKER_APPDATA}/npm/compose.yaml" << EOF
 # for wildcard certificates that work without external access.
 # =============================================================================
 
+# Image pinned to 2.15.1 (not :latest) - this version's web UI first-run
+# setup and certificate creation flow are documented and working in the
+# reference guide. Newer versions have introduced breaking API/schema
+# changes (no default admin account, certificate API validation errors).
+# To upgrade: change the tag below, docker compose pull, docker compose up -d,
+# then re-test certificate creation via web UI before relying on it.
+
 networks:
   socket_proxy:
     name: socket_proxy
@@ -1079,7 +1094,7 @@ networks:
 
 services:
   nginx-proxy-manager:
-    image: jc21/nginx-proxy-manager:latest
+    image: jc21/nginx-proxy-manager:2.15.1
     container_name: nginx-proxy-manager
     restart: unless-stopped
     networks:
