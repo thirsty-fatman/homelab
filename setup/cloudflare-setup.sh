@@ -2,11 +2,18 @@
 # =============================================================================
 # Cloudflare DNS Setup Script
 # =============================================================================
-# Version  : 1.0.1
+# Version  : 1.0.2
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
+# Filename : cloudflare-setup.sh
 #
 # Changelog:
+#   1.0.2 - 2026-06-12 - Fixed "unbound variable" error on CLOUDFLARE_TOKEN
+#                         in the .env-saving loop: CLOUDFLARE_TOKEN was never
+#                         assigned before "${!var}" indirect expansion tried
+#                         to read it under set -u. Added explicit
+#                         CLOUDFLARE_TOKEN="${CF_TOKEN}" mapping before the
+#                         loop and removed now-redundant duplicate save block.
 #   1.0.1 - 2026-06-12 - Fixed "((var++))" arithmetic expressions which exit
 #                         non-zero (triggering set -e abort) when var=0 -
 #                         the very first increment of any counter starting
@@ -117,7 +124,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   Cloudflare DNS Setup"
-echo "   v1.0.1 | 2026-06-12"
+echo "   v1.0.2 | 2026-06-12"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "This script creates or updates DNS A records in Cloudflare"
@@ -346,6 +353,9 @@ done
 # -----------------------------------------------------------------------------
 header "Saving to .env"
 
+# Map CF_TOKEN (used throughout this script) to the .env variable name
+CLOUDFLARE_TOKEN="${CF_TOKEN}"
+
 if [[ -f "$ENV_FILE" ]]; then
   # Update or append each variable
   for var in CLOUDFLARE_TOKEN DOMAIN ZONE_ID SERVER_LAN_IP; do
@@ -366,13 +376,6 @@ ZONE_ID=${ZONE_ID}
 SERVER_LAN_IP=${SERVER_LAN_IP}
 EOF
   chmod 600 "$ENV_FILE"
-fi
-
-# Save CF_TOKEN separately since variable name differs
-if grep -q "^CLOUDFLARE_TOKEN=" "$ENV_FILE"; then
-  sed -i "s|^CLOUDFLARE_TOKEN=.*|CLOUDFLARE_TOKEN=${CF_TOKEN}|" "$ENV_FILE"
-else
-  echo "CLOUDFLARE_TOKEN=${CF_TOKEN}" >> "$ENV_FILE"
 fi
 
 success "Cloudflare credentials saved to ${ENV_FILE}"
