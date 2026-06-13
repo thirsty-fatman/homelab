@@ -1,10 +1,14 @@
 #!/bin/bash
-# ha-setup.sh v1.0.4
+# ha-setup.sh v1.0.5
 # Sets up Home Assistant (Docker) on OSAN via macvlan on IoT VLAN (192.168.8.x)
 # Independent of server-setup.sh / cloudflare-setup.sh / npm-setup.sh
 # Local access only for now: http://192.168.8.2:8123
 #
 # CHANGELOG:
+# v1.0.5 - chmod 600 on netplan VLAN config (fixes "too open" warning).
+#          Remove stale container before docker compose up if it references
+#          a since-removed/recreated network (fixes "network ... not found"
+#          error when iot_macvlan is recreated with a new ID).
 # v1.0.4 - Fixed VLAN tagging: macvlan parent must be a VLAN 8 sub-interface
 #          (eno1.8), not eno1 directly. eno1 carries native/untagged VLAN
 #          (4.x); without tagging, macvlan traffic for 192.168.8.x never
@@ -29,6 +33,7 @@ SHIM_NAME="osan-shimnet"
 NETPLAN_FILE="/etc/netplan/90-vlan8.yaml"
 
 HA_IP="192.168.8.2"
+HA_APPDIR="/opt/docker/appdata/homeassistant"
 
 echo "Setting up VLAN ${VLAN_ID} sub-interface (${VLAN_IF}) via netplan..."
 if [ ! -f "${NETPLAN_FILE}" ]; then
@@ -40,9 +45,11 @@ network:
       id: ${VLAN_ID}
       link: ${PARENT_IF}
 EOF
+    chmod 600 "${NETPLAN_FILE}"
     netplan apply
 else
     echo "Netplan VLAN config already exists, skipping."
+    chmod 600 "${NETPLAN_FILE}"
 fi
 
 echo "Waiting for ${VLAN_IF} to come up..."
@@ -58,6 +65,8 @@ ip link set "${VLAN_IF}" up
 
 # --- Recreate macvlan network if it exists with wrong parent ---
 
+NETWORK_RECREATED=0
+
 if docker network inspect "${MACVLAN_NET}" >/dev/null 2>&1; then
     CURRENT_PARENT=$(docker network inspect "${MACVLAN_NET}" -f '{{ index .Options "parent" }}')
     if [ "${CURRENT_PARENT}" != "${VLAN_IF}" ]; then
@@ -70,6 +79,7 @@ if docker network inspect "${MACVLAN_NET}" >/dev/null 2>&1; then
             done
         fi
         docker network rm "${MACVLAN_NET}"
+        NETWORK_RECREATED=1
     fi
 fi
 
@@ -80,8 +90,18 @@ if ! docker network inspect "${MACVLAN_NET}" >/dev/null 2>&1; then
         --gateway="${IOT_GATEWAY}" \
         -o parent="${VLAN_IF}" \
         "${MACVLAN_NET}"
+    NETWORK_RECREATED=1
 else
     echo "Network '${MACVLAN_NET}' already exists with correct parent, skipping."
+fi
+
+# If the network was recreated, any existing container referencing the old
+# network ID is stale and must be removed before compose can recreate it.
+if [ "${NETWORK_RECREATED}" -eq 1 ]; then
+    if docker ps -a --format '{{.Names}}' | grep -q '^homeassistant$'; then
+        echo "Removing stale 'homeassistant' container (network was recreated)..."
+        docker rm -f homeassistant >/dev/null
+    fi
 fi
 
 # --- Shim interface: remove old (wrong parent) version if present ---
@@ -127,8 +147,6 @@ else
 fi
 
 # --- Home Assistant container ---
-
-HA_APPDIR="/opt/docker/appdata/homeassistant"
 
 echo "Creating HA app/config directories..."
 mkdir -p "${HA_APPDIR}/config"
