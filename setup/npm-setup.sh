@@ -2,12 +2,17 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.4.1
+# Version  : 1.4.2
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 # Filename : npm-setup.sh
 #
 # Changelog:
+#   1.4.2 - 2026-06-13 - Fixed restore command: tar archive entries are
+#                         prefixed with "./" (from "tar -C ~/npm-backup .")
+#                         so "tar -xzf ... data letsencrypt" failed with
+#                         "Not found in archive". Now extracts "./data" and
+#                         "./letsencrypt".
 #   1.4.1 - 2026-06-13 - Added certificate backup/restore commands to the
 #                         script header as copy-paste reference, so the
 #                         rate-limit-saving backup process travels with the
@@ -91,7 +96,7 @@
 #
 # RESTORE (after a reinstall, before or instead of creating a new cert -
 # copy npm-backup.tar.gz back to the server first, then run on the server):
-#   docker stop nginx-proxy-manager && sudo rm -rf /opt/docker/appdata/npm/data /opt/docker/appdata/npm/letsencrypt && sudo tar -xzf npm-backup.tar.gz -C /opt/docker/appdata/npm/ data letsencrypt && sudo chown -R 1000:1000 /opt/docker/appdata/npm/data /opt/docker/appdata/npm/letsencrypt && docker start nginx-proxy-manager
+#   docker stop nginx-proxy-manager && sudo rm -rf /opt/docker/appdata/npm/data /opt/docker/appdata/npm/letsencrypt && sudo tar -xzf npm-backup.tar.gz -C /opt/docker/appdata/npm/ ./data ./letsencrypt && sudo chown -R 1000:1000 /opt/docker/appdata/npm/data /opt/docker/appdata/npm/letsencrypt && docker start nginx-proxy-manager
 #
 # After restoring, this script (npm-setup.sh) will detect the existing
 # certificate and admin account automatically.
@@ -202,7 +207,7 @@ clear
 echo -e "${BOLD}${CYAN}"
 echo "============================================================"
 echo "   NGINX Proxy Manager Setup"
-echo "   v1.4.1 | 2026-06-13"
+echo "   v1.4.2 | 2026-06-13"
 echo "============================================================"
 echo -e "${RESET}"
 echo -e "This script configures NPM via its API — sets admin credentials,"
