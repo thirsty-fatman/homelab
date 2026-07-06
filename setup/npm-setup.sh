@@ -2,12 +2,17 @@
 # =============================================================================
 # NGINX Proxy Manager Setup Script
 # =============================================================================
-# Version  : 1.4.2
+# Version  : 1.5.1
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 # Filename : npm-setup.sh
 #
 # Changelog:
+#   1.5.1 - 2026-07-06 - AdGuard proxy host backend port 8081 -> 3003 to
+#                         match server-setup.sh 2.0.1.
+#   1.5.0 - 2026-07-06 - Removed Dockge and Portainer (dropped from the
+#                         stack). Added adguard proxy host (AdGuard Home
+#                         admin UI on :3003, http backend).
 #   1.4.2 - 2026-06-13 - Fixed restore command: tar archive entries are
 #                         prefixed with "./" (from "tar -C ~/npm-backup .")
 #                         so "tar -xzf ... data letsencrypt" failed with
@@ -323,12 +328,6 @@ while true; do
   fi
 done
 
-# Check if portainer is running
-INSTALL_PORTAINER="n"
-if docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^portainer$"; then
-  INSTALL_PORTAINER="y"
-fi
-
 # --- Confirmation ------------------------------------------------------------
 header "Confirmation Summary"
 echo -e "  Domain            : ${YELLOW}${DOMAIN}${RESET}"
@@ -339,11 +338,8 @@ echo -e "  NPM admin password: ${YELLOW}(set — not displayed)${RESET}"
 echo
 echo -e "  Proxy hosts to create:"
 echo -e "    https://homepage.${DOMAIN}  → ${SERVER_LAN_IP}:3000"
-echo -e "    https://dockge.${DOMAIN}    → ${SERVER_LAN_IP}:5001"
 echo -e "    https://npm.${DOMAIN}       → 127.0.0.1:81"
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  echo -e "    https://portainer.${DOMAIN} → ${SERVER_LAN_IP}:9443"
-fi
+echo -e "    https://adguard.${DOMAIN}   → ${SERVER_LAN_IP}:3003"
 echo
 read -rp "$(echo -e "${BOLD}Proceed? [y/N]: ${RESET}")" CONFIRM < /dev/tty
 echo
@@ -595,13 +591,9 @@ header "Creating Proxy Hosts"
 # Format: "subdomain|forward_host|forward_port|scheme"
 PROXY_HOSTS=(
   "homepage|${SERVER_LAN_IP}|3000|http"
-  "dockge|${SERVER_LAN_IP}|5001|http"
   "npm|127.0.0.1|81|http"
+  "adguard|${SERVER_LAN_IP}|3003|http"
 )
-
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  PROXY_HOSTS+=("portainer|${SERVER_LAN_IP}|9443|https")
-fi
 
 CREATED=0
 SKIPPED=0
@@ -692,9 +684,8 @@ domain = sys.argv[2]
 
 service_urls = {
     'homepage': 'https://homepage.' + domain,
-    'dockge': 'https://dockge.' + domain,
     'nginx-proxy-manager': 'https://npm.' + domain,
-    'portainer': 'https://portainer.' + domain,
+    'adguard': 'https://adguard.' + domain,
 }
 
 with open(services_file, 'r') as f:
@@ -754,11 +745,8 @@ echo -e "  Proxy hosts skipped: ${GREEN}${SKIPPED}${RESET} (already existed)"
 echo
 echo -e "  Your services are now available at:"
 echo -e "    ${CYAN}https://homepage.${DOMAIN}${RESET}"
-echo -e "    ${CYAN}https://dockge.${DOMAIN}${RESET}"
 echo -e "    ${CYAN}https://npm.${DOMAIN}${RESET}"
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  echo -e "    ${CYAN}https://portainer.${DOMAIN}${RESET}"
-fi
+echo -e "    ${CYAN}https://adguard.${DOMAIN}${RESET}"
 echo
 echo -e "${YELLOW}  Important notes:${RESET}"
 echo -e "  - Add local DNS records in your router pointing each subdomain to ${SERVER_LAN_IP}"
