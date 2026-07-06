@@ -2,12 +2,26 @@
 # =============================================================================
 # Ubuntu Server 24.04 - Post-Install Setup Script
 # =============================================================================
-# Version  : 1.8.4
+# Version  : 2.0.1
 # Created  : 2026-06-09
 # Author   : github.com/thirsty-fatman
 # Filename : server-setup.sh
 #
 # Changelog:
+#   2.0.1 - 2026-07-06 - Moved AdGuard web ports into the 3000 neighbourhood:
+#                         admin UI 8081 -> 3003, wizard 8083 -> 3033. DNS
+#                         stays on 53.
+#   2.0.0 - 2026-07-06 - BREAKING: Removed Dockge and Portainer entirely —
+#                         no longer part of the stack. Compose files managed
+#                         directly via CLI; script is the source of truth.
+#                         Existing installs: remove containers and appdata
+#                         directories manually (one-off cleanup).
+#   1.9.0 - 2026-07-06 - Added AdGuard Home as a base (non-optional) install,
+#                         pinned to v0.107.76. DNS bound to the server LAN IP
+#                         (avoids systemd-resolved stub listener conflict on
+#                         port 53). Wizard on :3033, admin UI on :3003.
+#                         Script remains non-destructive on re-runs — cleanup
+#                         of retired container directories is a manual task.
 #   1.8.4 - 2026-06-12 - CRITICAL: Pinned NGINX Proxy Manager image to
 #                         2.15.1 (was :latest). Newer NPM versions introduced
 #                         breaking changes (no default admin account,
@@ -77,10 +91,9 @@
 #   11. Applies POSIX ACLs on Docker directories
 #   12. Configures Docker log limits
 #   13. Deploys Socket Proxy (compose stack)
-#   14. Deploys Dockge (compose stack)
-#   15. Deploys Homepage dashboard (compose stack + starter config)
-#   16. Deploys NGINX Proxy Manager (compose stack)
-#   17. Optionally deploys Portainer CE (compose stack)
+#   14. Deploys Homepage dashboard (compose stack + starter config)
+#   15. Deploys NGINX Proxy Manager (compose stack)
+#   16. Deploys AdGuard Home (compose stack)
 #
 # Usage:
 #   Download and run — do NOT pipe curl directly into bash as it breaks
@@ -411,13 +424,6 @@ prompt_default DOCKER_BASE    "Docker base directory"  "/opt/docker"
 prompt_default DOCKER_APPDATA "Appdata subdirectory"   "${DOCKER_BASE}/appdata"
 prompt_default DOCKER_VOLUMES "Volumes subdirectory"   "${DOCKER_BASE}/volumes"
 
-# --- Optional Portainer ------------------------------------------------------
-header "Optional Components"
-echo -e "${BOLD}Install Portainer CE? (Docker management UI, port 9443)${RESET}"
-read -rp "  Install Portainer? [y/N]: " INSTALL_PORTAINER < /dev/tty
-echo
-INSTALL_PORTAINER=${INSTALL_PORTAINER,,}  # lowercase
-
 # =============================================================================
 # STEP 2 — Confirmation summary
 # =============================================================================
@@ -450,13 +456,9 @@ echo -e "  Volumes directory : ${YELLOW}${DOCKER_VOLUMES}${RESET}"
 echo
 echo -e "  Stacks to be deployed:"
 echo -e "    - Socket Proxy          (internal only)"
-echo -e "    - Dockge                (port ${YELLOW}5001${RESET})"
 echo -e "    - Homepage              (port ${YELLOW}3000${RESET})"
 echo -e "    - NGINX Proxy Manager   (ports ${YELLOW}80, 443, 81${RESET})"
-
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  echo -e "    - Portainer CE          (port ${YELLOW}9443${RESET})"
-fi
+echo -e "    - AdGuard Home          (DNS ${YELLOW}53${RESET}, UI ${YELLOW}3003${RESET}, wizard ${YELLOW}3033${RESET})"
 
 echo
 read -rp "$(echo -e "${BOLD}Proceed with these settings? [y/N]: ${RESET}")" CONFIRM < /dev/tty
@@ -664,15 +666,12 @@ mkdir -p "${DOCKER_BASE}"
 mkdir -p "${DOCKER_APPDATA}"
 mkdir -p "${DOCKER_VOLUMES}"
 mkdir -p "${DOCKER_APPDATA}/socket-proxy"
-mkdir -p "${DOCKER_APPDATA}/dockge"
-mkdir -p "${DOCKER_APPDATA}/dockge/stacks"
 mkdir -p "${DOCKER_APPDATA}/homepage"
 mkdir -p "${DOCKER_APPDATA}/homepage/config"
 mkdir -p "${DOCKER_APPDATA}/npm"
-
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  mkdir -p "${DOCKER_APPDATA}/portainer"
-fi
+mkdir -p "${DOCKER_APPDATA}/adguard"
+mkdir -p "${DOCKER_APPDATA}/adguard/work"
+mkdir -p "${DOCKER_APPDATA}/adguard/conf"
 
 success "Directories created."
 
@@ -733,12 +732,12 @@ GITHUB_USERNAME=${GITHUB_USERNAME}
 # -----------------------------------------------------------------------------
 # Container ports
 # -----------------------------------------------------------------------------
-DOCKGE_PORT=5001
 HOMEPAGE_PORT=3000
 NPM_HTTP_PORT=80
 NPM_HTTPS_PORT=443
 NPM_ADMIN_PORT=81
-PORTAINER_PORT=9443
+ADGUARD_UI_PORT=3003
+ADGUARD_WIZARD_PORT=3033
 EOF
 
 chmod 600 "${DOCKER_BASE}/.env"
@@ -805,50 +804,7 @@ docker compose -f "${DOCKER_APPDATA}/socket-proxy/compose.yaml" up -d
 success "Socket Proxy deployed."
 
 # -----------------------------------------------------------------------------
-# STEP 15 — Deploy Dockge
-# -----------------------------------------------------------------------------
-header "Deploying Dockge"
-
-cat > "${DOCKER_APPDATA}/dockge/compose.yaml" << EOF
-# =============================================================================
-# Dockge
-# =============================================================================
-# Compose file management UI.
-# UI: http://${SERVER_LAN_IP}:5001
-# Stacks folder: ${DOCKER_APPDATA}/dockge/stacks
-# =============================================================================
-
-networks:
-  socket_proxy:
-    name: socket_proxy
-    external: true
-
-services:
-  dockge:
-    image: louislam/dockge:latest
-    container_name: dockge
-    restart: unless-stopped
-    networks:
-      - socket_proxy
-    ports:
-      - "\${DOCKGE_PORT:-5001}:5001"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - \${APPDATA}/dockge:/app/data
-      - \${APPDATA}/dockge/stacks:/opt/stacks
-    environment:
-      - DOCKGE_STACKS_DIR=/opt/stacks
-EOF
-
-chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/dockge"
-docker compose \
-  --env-file "${DOCKER_BASE}/.env" \
-  -f "${DOCKER_APPDATA}/dockge/compose.yaml" \
-  up -d
-success "Dockge deployed."
-
-# -----------------------------------------------------------------------------
-# STEP 16 — Deploy Homepage
+# STEP 15 — Deploy Homepage
 # -----------------------------------------------------------------------------
 header "Deploying Homepage Dashboard"
 
@@ -1001,19 +957,12 @@ cat > "${DOCKER_APPDATA}/homepage/config/services.yaml" << EOF
       container: nginx-proxy-manager
       icon: nginx-proxy-manager.png
 
-  - Portainer:
-      href: https://${SERVER_LAN_IP}:9443
-      description: Docker management UI
+  - AdGuard Home:
+      href: http://${SERVER_LAN_IP}:3003
+      description: Network-wide DNS ad blocking
       server: ${DOCKER_CONNECTION_NAME}
-      container: portainer
-      icon: portainer.png
-
-  - Dockge:
-      href: http://${SERVER_LAN_IP}:5001
-      description: Compose stack management
-      server: ${DOCKER_CONNECTION_NAME}
-      container: dockge
-      icon: dockge.png
+      container: adguard
+      icon: adguard-home.png
 
   - Socket Proxy:
       description: Docker socket proxy (internal)
@@ -1057,7 +1006,7 @@ docker compose \
 success "Homepage dashboard deployed."
 
 # -----------------------------------------------------------------------------
-# STEP 17 — Deploy NGINX Proxy Manager
+# STEP 16 — Deploy NGINX Proxy Manager
 # -----------------------------------------------------------------------------
 header "Deploying NGINX Proxy Manager"
 
@@ -1120,20 +1069,25 @@ docker compose \
 success "NGINX Proxy Manager deployed."
 
 # -----------------------------------------------------------------------------
-# STEP 18 — Deploy Portainer (optional)
+# STEP 17 — Deploy AdGuard Home (base install)
 # -----------------------------------------------------------------------------
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  header "Deploying Portainer CE"
+header "Deploying AdGuard Home"
 
-  cat > "${DOCKER_APPDATA}/portainer/compose.yaml" << EOF
+cat > "${DOCKER_APPDATA}/adguard/compose.yaml" << EOF
 # =============================================================================
-# Portainer CE
+# AdGuard Home
 # =============================================================================
-# Docker management UI — use for monitoring and visibility.
-# Connects to Docker via Socket Proxy.
+# Network-wide DNS ad/tracker blocking. Base install — always deployed.
 #
-# UI: https://${SERVER_LAN_IP}:9443
-# Note: Self-signed certificate — browser will show a security warning.
+# First-run wizard : http://${SERVER_LAN_IP}:3033  (choose port 80 as the
+#                    web interface port in the wizard)
+# Admin UI (after) : http://${SERVER_LAN_IP}:3003
+# DNS listener     : ${SERVER_LAN_IP}:53 (tcp+udp)
+#
+# DNS port 53 is bound to the LAN IP only — systemd-resolved's stub listener
+# on 127.0.0.53 is untouched, so the host resolver keeps working. Do NOT
+# point UniFi/DHCP clients at this IP until the wizard + blocklists are
+# configured.
 # =============================================================================
 
 networks:
@@ -1142,31 +1096,31 @@ networks:
     external: true
 
 services:
-  portainer:
-    image: portainer/portainer-ce:latest
-    container_name: portainer
+  adguard:
+    image: adguard/adguardhome:v0.107.76
+    container_name: adguard
     restart: unless-stopped
     networks:
       - socket_proxy
     ports:
-      - "\${PORTAINER_PORT:-9443}:9443"
+      - "${SERVER_LAN_IP}:53:53/tcp"
+      - "${SERVER_LAN_IP}:53:53/udp"
+      - "\${ADGUARD_WIZARD_PORT:-3033}:3000"
+      - "\${ADGUARD_UI_PORT:-3003}:80"
     volumes:
-      - \${APPDATA}/portainer:/data
-    environment:
-      - DOCKER_HOST=tcp://socket-proxy:2375
-    command: --http-disabled
+      - \${APPDATA}/adguard/work:/opt/adguardhome/work
+      - \${APPDATA}/adguard/conf:/opt/adguardhome/conf
 EOF
 
-  chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/portainer"
-  docker compose \
-    --env-file "${DOCKER_BASE}/.env" \
-    -f "${DOCKER_APPDATA}/portainer/compose.yaml" \
-    up -d
-  success "Portainer CE deployed."
-fi
+chown -R "${USERNAME}:${USERNAME}" "${DOCKER_APPDATA}/adguard"
+docker compose \
+  --env-file "${DOCKER_BASE}/.env" \
+  -f "${DOCKER_APPDATA}/adguard/compose.yaml" \
+  up -d
+success "AdGuard Home deployed."
 
 # =============================================================================
-# STEP 19 — Post-setup optional configuration
+# STEP 18 — Post-setup optional configuration
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -1287,7 +1241,7 @@ while true; do
 done
 
 # =============================================================================
-# STEP 20 — Final summary
+# STEP 19 — Final summary
 # =============================================================================
 MACHINE_IP=$(hostname -I | awk '{print $1}')
 
@@ -1308,13 +1262,9 @@ echo -e "  .env file         : ${GREEN}${DOCKER_BASE}/.env${RESET}"
 echo
 echo -e "  Stacks deployed:"
 echo -e "    Socket Proxy          : ${GREEN}running (internal)${RESET}"
-echo -e "    Dockge                : ${CYAN}http://${MACHINE_IP}:5001${RESET}"
 echo -e "    Homepage              : ${CYAN}http://${MACHINE_IP}:3000${RESET}"
 echo -e "    NGINX Proxy Manager   : ${CYAN}http://${MACHINE_IP}:81${RESET}"
-
-if [[ "$INSTALL_PORTAINER" == "y" ]]; then
-  echo -e "    Portainer CE          : ${CYAN}https://${MACHINE_IP}:9443${RESET}"
-fi
+echo -e "    AdGuard Home (wizard) : ${CYAN}http://${MACHINE_IP}:3033${RESET}"
 
 echo
 
@@ -1357,7 +1307,9 @@ fi
 echo -e "${YELLOW}  Other important notes:${RESET}"
 echo -e "  - Log out and back in (or reboot) for docker group membership to take effect"
 echo -e "  - NPM default login: admin@example.com / changeme — change immediately if not done"
-echo -e "  - Dockge stacks folder: ${DOCKER_APPDATA}/dockge/stacks"
+echo -e "  - AdGuard Home wizard: http://${SERVER_LAN_IP}:3033 — choose port 80 as web"
+echo -e "    interface port; admin UI is then http://${SERVER_LAN_IP}:3003"
+echo -e "  - Do NOT point UniFi DNS/DHCP at ${SERVER_LAN_IP} until AdGuard is configured"
 echo -e "  - Homepage config: ${DOCKER_APPDATA}/homepage/config/"
 echo -e "  - Use ${DOCKER_BASE}/.env as single source of truth for all stack variables"
 echo
