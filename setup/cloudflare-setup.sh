@@ -2,12 +2,14 @@
 # =============================================================================
 # Cloudflare DNS Setup Script
 # =============================================================================
-# Version  : 1.0.2
+# Version  : 1.1.0
 # Created  : 2026-06-10
 # Author   : github.com/thirsty-fatman
 # Filename : cloudflare-setup.sh
 #
 # Changelog:
+#   1.1.0 - 2026-07-06 - Removed dockge and portainer DNS records (dropped
+#                         from the stack). Added adguard subdomain.
 #   1.0.2 - 2026-06-12 - Fixed "unbound variable" error on CLOUDFLARE_TOKEN
 #                         in the .env-saving loop: CLOUDFLARE_TOKEN was never
 #                         assigned before "${!var}" indirect expansion tried
@@ -83,7 +85,6 @@ fi
 # -----------------------------------------------------------------------------
 ENV_FILE="/opt/docker/.env"
 SERVER_LAN_IP=""
-INSTALL_PORTAINER="n"
 
 if [[ -f "$ENV_FILE" ]]; then
   info "Found ${ENV_FILE} — loading existing values."
@@ -225,13 +226,7 @@ header "Subdomains to Configure"
 echo -e "  The following DNS A records will be created or updated in Cloudflare."
 echo -e "  All records point to ${YELLOW}${SERVER_LAN_IP}${RESET} and are set to DNS only (no proxy).\n"
 
-# Build list of subdomains based on what's installed
-SUBDOMAINS=("homepage" "dockge" "npm")
-
-# Add portainer if installed
-if [[ "${INSTALL_PORTAINER:-n}" == "y" ]] || docker ps --format "{{.Names}}" 2>/dev/null | grep -q "^portainer$"; then
-  SUBDOMAINS+=("portainer")
-fi
+SUBDOMAINS=("homepage" "npm" "adguard")
 
 for sub in "${SUBDOMAINS[@]}"; do
   echo -e "  ${CYAN}${sub}.${DOMAIN}${RESET} → ${SERVER_LAN_IP}"
